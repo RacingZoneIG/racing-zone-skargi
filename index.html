@@ -4469,56 +4469,122 @@ function fileToBase64(file) {
     });
 }
 
-// === PLIKI DOWODOWE NA CLOUDFLARE R2 (przez Worker „fia-upload-presign”) ===
-// Worker wystawia jednorazowe linki: /presign (wysyłka pliku prosto do R2) i /presign-get (podgląd).
-const R2_WORKER_URL = "https://fia-upload-presign.andrzejkedzior170.workers.dev";
-// Ten sam Worker obsługuje dwie ligi — pliki Racing Zone trafiają do osobnego folderu w R2.
-const R2_FOLDER_PREFIX = "racing-zone/";
+// === PLIKI DOWODÓW (do 1 GB) — magazyn R2 Racing Zone; obsługuje go Worker „racing-zone-guard” ===
+// Wysłać albo otworzyć plik może tylko zalogowany przez Discorda. Plik idzie w częściach po 64 MB.
+// Pliki sprzed tej zmiany (klucz "racing-zone/…") leżą w poprzednim magazynie i otwierają się jak dawniej.
+const R2_WORKER_URL = "https://fia-upload-presign.andrzejkedzior170.workers.dev"; // tylko podgląd starych plików
+const R2_LEGACY_PREFIX = "racing-zone/";
 
 // === PLIKI ZAPISANE WCZEŚNIEJ W BAZIE FIREBASE (tylko odczyt) ===
 // Pliki dodane, gdy strona trzymała je w bazie (węzeł evidence_files, klucz "fb:<id>"), nadal da się otworzyć.
 const EVIDENCE_DB_NODE = "evidence_files";
 
-async function uploadFileToStorage(file, folder, onProgress) {
-    if (!R2_WORKER_URL || R2_WORKER_URL === "WKLEJ_TU_ADRES_WORKERA") {
-        throw new Error("Upload plików nie jest skonfigurowany: uzupełnij R2_WORKER_URL w kodzie strony.");
+// Komunikaty serwera plików (pozostałe — wspólne komunikaty Workera).
+function filesErrorText(code, status, detail) {
+    const T = {
+        login_required: ["Zaloguj się przez Discorda, aby wysłać albo otworzyć plik.", "Log in with Discord to upload or open a file."],
+        files_not_configured: ["Magazyn plików nie jest jeszcze podłączony do Workera (powiązanie R2 „FILES”).", "File storage is not connected to the Worker yet (R2 binding “FILES”)."],
+        file_too_large: ["Plik jest za duży (najwyżej 1 GB).", "The file is too large (max 1 GB)."],
+        file_empty: ["Plik jest pusty.", "The file is empty."],
+        file_type_not_allowed: ["Tego typu pliku nie można dodać — wybierz zdjęcie, film, PDF albo plik .txt/.log.", "This file type is not allowed — choose an image, video, PDF or a .txt/.log file."],
+        files_quota_exceeded: ["Przekroczono dobowy limit wysyłanych plików" + (detail && detail.limitMb ? ` (${Math.round(detail.limitMb / 102.4) / 10} GB)` : "") + ". Spróbuj później albo napisz do stewardów.", "Daily upload limit reached. Try again later or contact the stewards."],
+        upload_failed: ["Wysyłanie pliku zostało przerwane — spróbuj jeszcze raz.", "The upload was interrupted — try again."],
+        upload_invalid: ["Wysyłanie pliku zostało przerwane — spróbuj jeszcze raz.", "The upload was interrupted — try again."],
+        not_your_upload: ["To wysyłanie należy do innego konta — zaloguj się ponownie.", "This upload belongs to another account — log in again."],
+        length_required: ["Przeglądarka nie podała rozmiaru pliku — spróbuj jeszcze raz.", "The browser did not send the file size — try again."],
+        file_not_found: ["Pliku nie ma w magazynie (mógł zostać usunięty).", "The file is not in storage (it may have been deleted)."],
+        file_key_invalid: ["Nieprawidłowy plik.", "Invalid file."],
+    };
+    const t = T[code];
+    if (t) return uiIsPl() ? t[0] : t[1];
+    return guardErrorText(code, status);
+}
+
+async function filesAuth() {
+    const user = fbAuth && fbAuth.currentUser;
+    if (!user) throw new Error(filesErrorText("login_required"));
+    return "Bearer " + (await user.getIdToken());
+}
+
+async function filesPost(path, body) {
+    const auth = await filesAuth();
+    let res;
+    try {
+        res = await fetch(GUARD_WORKER_URL + path, { method: "POST", headers: { "Content-Type": "application/json", Authorization: auth }, body: JSON.stringify(body) });
+    } catch (e) {
+        throw new Error(uiIsPl() ? "Brak połączenia z serwerem plików (Worker)." : "Cannot reach the file server (Worker).");
     }
-
-    const presignRes = await fetch(`${R2_WORKER_URL}/presign`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            filename: file.name,
-            contentType: file.type || "application/octet-stream",
-            folder: R2_FOLDER_PREFIX + String(folder || "misc"),
-        }),
-    });
-
-    if (!presignRes.ok) {
-        const errText = await presignRes.text().catch(() => "");
-        throw new Error(`Nie udało się przygotować uploadu (${presignRes.status}). ${errText}`);
+    let data = null;
+    try { data = await res.json(); } catch (e) {}
+    if (!res.ok) {
+        const err = new Error(filesErrorText(data && data.error, res.status, data && data.detail));
+        err.status = res.status;
+        throw err;
     }
+    return data || {};
+}
 
-    const { uploadUrl, key } = await presignRes.json();
-
-    await new Promise((resolve, reject) => {
+// Jedna część pliku (do 64 MB) — przez XHR, żeby pokazywać postęp wysyłania.
+async function filesPutPart(start, partNumber, blob, onLoaded) {
+    const auth = await filesAuth();
+    return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        xhr.open("PUT", uploadUrl, true);
-        xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
-        xhr.upload.onprogress = (evt) => {
-            if (onProgress && evt.lengthComputable) {
-                onProgress(Math.round((evt.loaded / evt.total) * 100));
-            }
-        };
+        xhr.open("PUT", GUARD_WORKER_URL + "/files/part", true);
+        xhr.setRequestHeader("Authorization", auth);
+        xhr.setRequestHeader("X-Upload-Key", start.key);
+        xhr.setRequestHeader("X-Upload-Id", start.uploadId);
+        xhr.setRequestHeader("X-Part-Number", String(partNumber));
+        xhr.upload.onprogress = (evt) => { if (evt.lengthComputable && onLoaded) onLoaded(evt.loaded); };
         xhr.onload = () => {
-            if (xhr.status >= 200 && xhr.status < 300) resolve();
-            else reject(new Error(`Błąd wysyłania pliku do R2 (status ${xhr.status}).`));
+            let data = null;
+            try { data = JSON.parse(xhr.responseText); } catch (e) {}
+            if (xhr.status >= 200 && xhr.status < 300 && data && data.etag) return resolve(data.etag);
+            const err = new Error(filesErrorText(data && data.error, xhr.status, data && data.detail));
+            err.status = xhr.status;
+            reject(err);
         };
-        xhr.onerror = () => reject(new Error("Błąd sieci podczas wysyłania pliku do R2."));
-        xhr.send(file);
+        xhr.onerror = () => {
+            const err = new Error(uiIsPl() ? "Błąd sieci podczas wysyłania pliku." : "Network error while uploading the file.");
+            err.status = 0;
+            reject(err);
+        };
+        xhr.send(blob);
     });
+}
 
-    return { key, name: file.name, size: file.size, type: file.type };
+async function uploadFileToStorage(file, folder, onProgress) {
+    const start = await filesPost("/files/start", { filename: file.name, contentType: file.type || "", size: file.size, folder: String(folder || "misc") });
+    const partSize = Number(start.partSize) || 64 * 1024 * 1024;
+    const count = Math.max(1, Math.ceil(file.size / partSize));
+    const parts = [];
+    let sent = 0;
+    const report = (loaded) => { if (onProgress && file.size) onProgress(Math.min(99, Math.round((sent + loaded) / file.size * 100))); };
+    try {
+        for (let n = 1; n <= count; n++) {
+            const blob = file.slice((n - 1) * partSize, Math.min(n * partSize, file.size));
+            let etag = null;
+            for (let attempt = 1; ; attempt++) {
+                try {
+                    etag = await filesPutPart(start, n, blob, report);
+                    break;
+                } catch (e) {
+                    // Zerwane połączenie, chwilowy błąd serwera albo limit — ta sama część jeszcze raz (najwyżej 3 próby).
+                    const retry = e.status === 0 || e.status === 429 || e.status >= 500;
+                    if (!retry || attempt >= 3) throw e;
+                    await new Promise(r => setTimeout(r, 2000 * attempt));
+                }
+            }
+            parts.push({ partNumber: n, etag });
+            sent += blob.size;
+            report(0);
+        }
+        await filesPost("/files/complete", { key: start.key, uploadId: start.uploadId, parts });
+    } catch (e) {
+        filesPost("/files/abort", { key: start.key, uploadId: start.uploadId }).catch(() => {});
+        throw e;
+    }
+    if (onProgress) onProgress(100);
+    return { key: start.key, name: file.name, size: file.size, type: file.type };
 }
 
 const _evidenceUrlCache = new Map();
@@ -4556,18 +4622,22 @@ async function getFreshEvidenceUrl(key, expiresIn) {
     const body = { key };
     if (typeof expiresIn === "number") body.expiresIn = expiresIn;
 
-    const res = await fetch(`${R2_WORKER_URL}/presign-get`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-        const errText = await res.text().catch(() => "");
-        throw new Error(`Nie udało się pobrać linku do podglądu (${res.status}). ${errText}`);
+    let url, actualTtl;
+    if (String(key).startsWith(R2_LEGACY_PREFIX)) {
+        // Plik sprzed zmiany — leży w poprzednim magazynie.
+        const res = await fetch(`${R2_WORKER_URL}/presign-get`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            const errText = await res.text().catch(() => "");
+            throw new Error(`Nie udało się pobrać linku do podglądu (${res.status}). ${errText}`);
+        }
+        ({ url, expiresIn: actualTtl } = await res.json());
+    } else {
+        ({ url, expiresIn: actualTtl } = await filesPost("/files/link", body));
     }
-
-    const { url, expiresIn: actualTtl } = await res.json();
     const ttlMs = (typeof actualTtl === "number" ? actualTtl : 300) * 1000;
     _evidenceUrlCache.set(cacheKey, { url, expiresAt: Date.now() + ttlMs });
     return url;
