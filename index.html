@@ -1201,7 +1201,7 @@
     /* Modale logowania stewarda muszą być dostępne ponad nakładką blokady strony
        (z-index 999999), żeby Główny Steward / ROOT mógł się zalogować nawet, gdy
        strona jest zablokowana dla kierowców/zwykłych stewardów, i uzyskać dostęp. */
-    #adminLoginModal, #externalJudgeModal {
+    #adminLoginModal {
       z-index: 1000000;
     }
     .login-box {
@@ -2865,41 +2865,12 @@
         <svg width="18" height="18" viewBox="0 0 127.14 96.36" fill="currentColor"><path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z"/></svg>
         <span data-key="discordLoginBtn">Zaloguj przez Discord</span>
       </button>
-      <div style="display:flex; align-items:center; gap:10px; margin:14px 0 10px;">
-        <div style="flex:1; height:1px; background: var(--border);"></div>
-        <span style="font-size:10px; color: var(--text-dim); letter-spacing:2px;" data-key="orDivider">LUB</span>
-        <div style="flex:1; height:1px; background: var(--border);"></div>
-      </div>
-      <button type="button" class="btn-secondary" style="width:100%; justify-content:center; margin-bottom:16px;" onclick="closeAdminLogin(); openExternalJudgeLogin();">
-        <span data-key="externalJudgeLoginBtn">Zaloguj jako sędzia spoza ligi</span>
-      </button>
       <button class="btn-secondary" onclick="closeAdminLogin()" data-key="cancelBtn">Anuluj</button>
       <div id="loginStatus" style="margin-top:10px; font-size:12px; color:#f97373;"></div>
     </div>
 
   </div>
 
-  <div id="externalJudgeModal" class="login-modal">
-    <div class="login-box">
-      <h1 data-key="externalJudgeTitle">Sędzia spoza ligi</h1>
-      <p style="font-size: 11px; color: var(--amber-text); margin-bottom: 16px; line-height:1.5;" data-key="externalJudgeDesc">Dostęp gościnny dla sędziego spoza ligi, bez konta stewarda ani logowania przez Discord. Uprawnienia są ograniczone do przeglądu i oceny zgłoszeń oraz apelacji.</p>
-      <div class="field" style="text-align:left; margin-bottom:12px;">
-        <label data-key="labelNick">Twój Nick</label>
-        <input id="externalJudgeNick" type="text" placeholder="np. Sędzia Kowalski" />
-      </div>
-      <div class="field" style="text-align:left; margin-bottom:6px;">
-        <label data-key="externalJudgePasswordLabel">Hasło dostępu</label>
-        <input id="externalJudgePassword" type="password" placeholder="••••••••" autocomplete="off" />
-        <small style="color: var(--text-dim); font-size: 11px;" data-key="externalJudgePasswordHint">Hasło otrzymujesz od organizatora ligi.</small>
-        <span class="error-message" id="externalJudgePasswordError" data-key="externalJudgePasswordError">Nieprawidłowe hasło.</span>
-      </div>
-      <button type="button" class="discord-login-btn" style="width:100%; justify-content:center; margin:10px 0; background: var(--bg-card); border: 1px solid var(--border); color: var(--text);" onclick="submitExternalJudgeLogin()">
-        <span data-key="externalJudgeSubmit">Zaloguj się jako sędzia</span>
-      </button>
-      <button class="btn-secondary" onclick="closeExternalJudgeLogin()" data-key="cancelBtn">Anuluj</button>
-      <div id="externalJudgeStatus" style="margin-top:10px; font-size:12px; color:#f97373;"></div>
-    </div>
-  </div>
 
 
   <div id="descModal" class="desc-modal">
@@ -4067,11 +4038,11 @@ if (!fbAuth) console.error("[bezpieczeństwo] Brak apiKey w firebaseConfig — l
 let fbClaims = {};
 let sessionExpiredNotice = false;
 // Sesja jest ważna, dopóki trwa potwierdzenie członkostwa w serwerze Discord ligi (memberUntil,
-// wydane przez Workera przy logowaniu) albo sesja sędziego spoza ligi (judgeUntil).
+// wydane przez Workera przy logowaniu). Logowanie sędziów spoza ligi zostało wyłączone.
 // Starsze lub przeterminowane sesje trzeba odnowić logowaniem — wtedy członkostwo jest sprawdzane od nowa.
 function sessionIsFresh(claims) {
     if (!claims) return false;
-    if (claims.judge === true) return Number(claims.judgeUntil) > Date.now();
+    if (claims.judge === true) return false; // dawne sesje sędziów spoza ligi — wylogowujemy
     return Number(claims.memberUntil) > Date.now();
 }
 const authReady = new Promise(resolve => {
@@ -4127,7 +4098,7 @@ authReady.then(() => {
     authResolved = true;
     updateLoginGate();
     // Gdy sesja wygaśnie przy otwartej stronie — przeładowanie pokaże ekran logowania.
-    const until = fbClaims.judge === true ? Number(fbClaims.judgeUntil) : Number(fbClaims.memberUntil);
+    const until = Number(fbClaims.memberUntil);
     if (fbAuth && fbAuth.currentUser && until > Date.now()) {
         setTimeout(() => location.reload(), Math.min(until - Date.now() + 1000, 2147483000));
     }
@@ -4152,7 +4123,6 @@ function updateLoginGate(busyText) {
     const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
     set("rzGateDriverLabel", pl ? "Zaloguj przez Discord" : "Log in with Discord");
     set("rzGateStewardBtn", pl ? "Panel stewarda (Discord)" : "Steward panel (Discord)");
-    set("rzGateJudgeBtn", pl ? "Sędzia spoza ligi (hasło)" : "External judge (password)");
     set("rzGateText",
         state === "config" ? (pl ? "Logowanie nie jest jeszcze skonfigurowane — w kodzie strony brakuje klucza Web API Firebase (apiKey). Administratorze: INSTRUKCJA.md, krok 4."
                                  : "Login is not configured yet — the Firebase Web API key (apiKey) is missing in the page code.")
@@ -5016,6 +4986,197 @@ let globalIncidents = [];
 let globalAppeals = [];
 let globalTrash = [];
 let globalChatData = null;
+
+// ============================================================
+// === NOTATKI WEWNĘTRZNE I GŁOSY SĘDZIÓW — węzeł incident_private ===
+// Zgłoszenia (incidents/) czyta każdy członek serwera, więc pola wewnętrzne trzymamy osobno,
+// w incident_private/<id>, który reguły bazy pokazują tylko zespołowi. Dla zespołu są one
+// dołączane do obiektów w globalIncidents, więc reszta kodu dalej używa r.notes / r.stewardVotes.
+// ============================================================
+const PRIVATE_NODE = "incident_private";
+const PRIVATE_INCIDENT_FIELDS = ["notes", "stewardVotes"];
+let globalIncidentPrivate = {};
+let lastIncidentsSnapshot = null;
+let incidentPrivateLoaded = false;
+const privatePath = (id, field) => `${PRIVATE_NODE}/${id}/${field}`;
+
+function mergeIncidentPrivate(list) {
+    (list || []).forEach(r => {
+        const p = globalIncidentPrivate[r.id];
+        if (!p) return;
+        PRIVATE_INCIDENT_FIELDS.forEach(f => { if (p[f] !== undefined && p[f] !== null) r[f] = p[f]; });
+    });
+}
+
+// Zapis całego zgłoszenia (przywracanie, zmiana ID, import) — część wewnętrzna idzie do incident_private.
+function splitIncidentUpdates(id, data, updates) {
+    updates = updates || {};
+    if (data === null || data === undefined) {
+        updates[`incidents/${id}`] = null;
+        updates[`${PRIVATE_NODE}/${id}`] = null;
+        return updates;
+    }
+    const pub = Object.assign({}, data), priv = {};
+    delete pub.id;
+    PRIVATE_INCIDENT_FIELDS.forEach(f => {
+        if (pub[f] !== undefined && pub[f] !== null && pub[f] !== "") priv[f] = pub[f];
+        delete pub[f];
+    });
+    updates[`incidents/${id}`] = pub;
+    updates[`${PRIVATE_NODE}/${id}`] = Object.keys(priv).length ? priv : null;
+    return updates;
+}
+
+// Ścieżki z danych przywracania (także ze starych wpisów Dziennika) → właściwe miejsca w bazie.
+function mapRestoreItem(path, data, updates) {
+    const m = /^incidents\/([^/]+)(?:\/(.+))?$/.exec(String(path || ""));
+    if (m && !m[2]) return splitIncidentUpdates(m[1], data, updates);
+    if (m && PRIVATE_INCIDENT_FIELDS.includes(m[2].split("/")[0])) { updates[`${PRIVATE_NODE}/${m[1]}/${m[2]}`] = data; return updates; }
+    updates[path] = data;
+    return updates;
+}
+
+// Firebase odrzuca update(), w którym jedna ścieżka zawiera drugą — wtedy wkładamy dziecko do rodzica.
+function collapseNestedUpdates(updates) {
+    const keys = Object.keys(updates).sort((a, b) => a.length - b.length);
+    const out = {};
+    keys.forEach(k => {
+        const parent = Object.keys(out).find(p => k.startsWith(p + "/"));
+        if (!parent) { out[k] = updates[k]; return; }
+        if (out[parent] === null || typeof out[parent] !== "object") return; // rodzic usuwany/nadpisywany prostą wartością
+        let o = out[parent] = JSON.parse(JSON.stringify(out[parent]));
+        const rest = k.slice(parent.length + 1).split("/");
+        rest.slice(0, -1).forEach(seg => { if (!o[seg] || typeof o[seg] !== "object") o[seg] = {}; o = o[seg]; });
+        if (updates[k] === null) delete o[rest[rest.length - 1]]; else o[rest[rest.length - 1]] = updates[k];
+    });
+    return out;
+}
+
+// Jednorazowe przeniesienie starych notatek i głosów z incidents/ do incident_private/
+// (robi to pierwsza osoba z zespołu, która otworzy panel po aktualizacji).
+let privateMigrationBusy = false, privateMigrationFailed = false;
+function migrateLegacyPrivateFields() {
+    if (!isAdminAuthenticated || !incidentPrivateLoaded || !lastIncidentsSnapshot || privateMigrationBusy || privateMigrationFailed) return;
+    const upd = {};
+    let moved = 0;
+    lastIncidentsSnapshot.forEach(ch => {
+        const v = ch.val() || {}, id = ch.key, p = globalIncidentPrivate[id] || {};
+        if (v.notes !== undefined && v.notes !== null) {
+            if (p.notes === undefined || p.notes === null) upd[privatePath(id, "notes")] = v.notes;
+            upd[`incidents/${id}/notes`] = null;
+            moved++;
+        }
+        if (v.stewardVotes && typeof v.stewardVotes === "object") {
+            Object.entries(v.stewardVotes).forEach(([scope, votes]) => Object.entries(votes || {}).forEach(([key, vote]) => {
+                if (!(p.stewardVotes && p.stewardVotes[scope] && p.stewardVotes[scope][key])) upd[privatePath(id, `stewardVotes/${scope}/${key}`)] = vote;
+            }));
+            upd[`incidents/${id}/stewardVotes`] = null;
+            moved++;
+        }
+    });
+    if (!moved) return;
+    privateMigrationBusy = true;
+    database.ref().update(upd)
+        .then(() => console.info(`[bezpieczeństwo] Przeniesiono notatki wewnętrzne i głosy (${moved} pól) do ${PRIVATE_NODE}.`))
+        .catch(err => { privateMigrationFailed = true; console.warn("Nie udało się przenieść notatek i głosów:", err && err.message); })
+        .finally(() => { privateMigrationBusy = false; });
+}
+
+let incidentPrivateListening = false;
+function listenToIncidentPrivate() {
+    if (incidentPrivateListening) return;
+    incidentPrivateListening = true;
+    database.ref(PRIVATE_NODE).on("value", snap => {
+        globalIncidentPrivate = snap.val() || {};
+        incidentPrivateLoaded = true;
+        if (typeof window.rzRerenderIncidents === "function") window.rzRerenderIncidents();
+        migrateLegacyPrivateFields();
+    }, err => {
+        incidentPrivateListening = false;
+        console.warn("Brak dostępu do notatek wewnętrznych:", err && err.message);
+    });
+}
+
+// ============================================================
+// === CZAT KIEROWCY — tylko wiadomości z jego spraw ===
+// Zespół czyta cały węzeł chat. Kierowcy reguły bazy pozwalają tylko na zapytanie
+// orderByChild("caseId").equalTo(<jego sprawa>), więc słuchamy osobno każdej jego sprawy.
+// ============================================================
+let chatScoped = false;
+const scopedChatRefs = new Map(), scopedChatParts = {};
+function applyChatData(data) {
+    globalChatData = data;
+    renderAdminChatBox();
+    renderPlayerChatBox();
+}
+function ownCaseIds() {
+    const uid = currentUid();
+    if (!uid) return [];
+    const ids = new Set();
+    (globalIncidents || []).forEach(r => { if (String(r.discordId) === uid || String(r.accusedDiscordId) === uid) ids.add(String(r.id)); });
+    (globalAppeals || []).forEach(a => { if (String(a.discordId) === uid && a.appealId) ids.add(String(a.appealId)); });
+    return [...ids].filter(id => /^[A-Za-z0-9_-]{1,40}$/.test(id));
+}
+function syncScopedChat() {
+    if (!chatScoped) return;
+    const want = new Set(ownCaseIds());
+    let removed = false, added = false;
+    scopedChatRefs.forEach((q, id) => { if (!want.has(id)) { q.off(); scopedChatRefs.delete(id); delete scopedChatParts[id]; removed = true; } });
+    if (removed) applyChatData(Object.assign({}, ...Object.values(scopedChatParts)));
+    want.forEach(id => {
+        if (scopedChatRefs.has(id)) return;
+        added = true;
+        const q = database.ref("chat").orderByChild("caseId").equalTo(id);
+        scopedChatRefs.set(id, q);
+        q.on("value", snap => {
+            scopedChatParts[id] = snap.val() || {};
+            applyChatData(Object.assign({}, ...Object.values(scopedChatParts)));
+        }, err => {
+            scopedChatRefs.delete(id);
+            console.warn(`Brak dostępu do czatu sprawy ${id}:`, err && err.message);
+        });
+    });
+    if (!added && globalChatData === null) applyChatData({});
+}
+
+// ============================================================
+// === UPRAWNIENIA DO USUWANIA (te same warunki sprawdzają reguły bazy) ===
+// ============================================================
+function stewardPerm(name) {
+    return !!(isAdminAuthenticated && loggedInSteward && loggedInSteward.permissions && loggedInSteward.permissions[name]);
+}
+// Zmiana ID zgłoszenia usuwa stary wpis, więc wymaga prawa do edycji lub usuwania zgłoszeń.
+function canRenameIncidents() {
+    return stewardIsRootLike() || stewardPerm("edit_reports") || stewardPerm("access_trash") || stewardPerm("manage_settings");
+}
+
+// Wpis Dziennika zapisany przez kierowcę — reguły bazy wymuszają przy nim jego uid i kategorię REPORT/APPEAL/CHAT.
+function isDriverLog(log) {
+    if (!log || !log.uid) return false; // wpisy sprzed pola uid — dziś nie da się takich podrzucić
+    if (!["REPORT", "APPEAL", "CHAT"].includes(log.category)) return false;
+    if (String(log.uid) === String(currentUid() || "")) return false;
+    return !(globalStewards || []).some(s => String(s.id) === String(log.uid));
+}
+// Z wpisu kierowcy przywracamy tylko to, co da się bezpiecznie cofnąć: odtworzenie USUNIĘTEGO
+// zgłoszenia, cofnięcie wycofania i oświadczenie strony — nigdy nadpisania istniejącej sprawy.
+function restorableItemsOf(log) {
+    const items = (log && log.restore && Array.isArray(log.restore.items)) ? log.restore.items : [];
+    if (!isDriverLog(log)) return items;
+    const t = String(log.targetId || ""), inc = (globalIncidents || []).find(r => r.id === t);
+    const ok = items.filter(it => {
+        const p = String((it && it.path) || "");
+        if (p === `incidents/${t}`) return !inc;
+        if (p === `incidents/${t}/status` || p === `incidents/${t}/withdrawnAt` || p === `incidents/${t}/withdrawReason`) return !!inc && inc.status === "Wycofane";
+        return p.startsWith(`incidents/${t}/statements/`);
+    });
+    if (!ok.length) {
+        alert(currentLang === 'pl'
+            ? "Ten wpis zapisał kierowca. Ze względów bezpieczeństwa można z niego przywrócić tylko usunięte zgłoszenie, cofnąć wycofanie albo przywrócić oświadczenie — nie nadpisze on istniejącej sprawy."
+            : "This entry was written by a driver. For safety it can only restore a deleted report, undo a withdrawal or restore a statement — it cannot overwrite an existing case.");
+        return null;
+    }
+    return ok;
+}
 // Sekcje „Użytkownicy i Role” i „Kosz” nie mają już osobnych haseł — dostęp wynika z roli
 // i uprawnień konta stewarda (USR / TRASH), a ten sam warunek egzekwują reguły bazy.
 function stewardIsRootLike() {
@@ -5762,110 +5923,6 @@ function logoutDiscordDriver() {
         return;
     }
     applyDriverAuthUI();
-}
-
-// ============ LOGOWANIE SĘDZIEGO SPOZA LIGI (hasłem, do panelu admina) ============
-// Dla gościnnego sędziego bez konta stewarda i bez logowania przez Discord — np. sędzia
-// zapraszany z innej ligi na pojedyncze wydarzenie. Dostęp jest chroniony wspólnym hasłem;
-// hasło sprawdza Worker „racing-zone-guard” (sekret JUDGE_PASSWORD albo JUDGE_PASSWORD_HASH) —
-// w kodzie strony nie ma ani hasła, ani jego hasha. Worker ogranicza liczbę prób i wydaje
-// sesję ważną kilka godzin (JUDGE_SESSION_HOURS), po której baza przestaje przyjmować zapisy.
-
-// Uprawnienia gościnnego sędziego — celowo ograniczone: może przeglądać i oceniać
-// zgłoszenia oraz apelacje, ale nie ma dostępu do zarządzania użytkownikami, Kosza,
-// edycji zgłoszeń/notatek/apelacji ani ustawień systemu.
-const EXTERNAL_JUDGE_PERMISSIONS = {
-    review_incidents: true, review_appeals: true,
-    manage_users: false, access_trash: false,
-    edit_reports: false, edit_notes: false, edit_appeals: false,
-    clear_chat: false, manage_settings: false
-};
-
-function openExternalJudgeLogin() {
-    const modal = document.getElementById("externalJudgeModal");
-    if (!modal) return;
-    document.getElementById("externalJudgeStatus").textContent = "";
-    document.getElementById("externalJudgeNick").value = "";
-    document.getElementById("externalJudgePassword").value = "";
-    modal.style.display = "flex";
-}
-
-function closeExternalJudgeLogin() {
-    const modal = document.getElementById("externalJudgeModal");
-    if (modal) modal.style.display = "none";
-    document.getElementById("externalJudgeStatus").textContent = "";
-}
-
-async function submitExternalJudgeLogin() {
-    const nickInput = document.getElementById("externalJudgeNick");
-    const passInput = document.getElementById("externalJudgePassword");
-    const errorEl = document.getElementById("externalJudgePasswordError");
-    const statusEl = document.getElementById("externalJudgeStatus");
-
-    const nick = nickInput.value.trim();
-    const password = passInput.value;
-
-    if (!nick) {
-        statusEl.textContent = langData[currentLang].externalJudgeNickRequired;
-        return;
-    }
-    if (!password) {
-        statusEl.textContent = langData[currentLang].externalJudgePasswordRequired;
-        return;
-    }
-
-    if (!fbAuth) {
-        statusEl.textContent = currentLang === 'pl' ? "Logowanie nie jest skonfigurowane (brak apiKey w firebaseConfig)." : "Login is not configured (missing apiKey).";
-        return;
-    }
-    statusEl.textContent = currentLang === 'pl' ? "Sprawdzanie hasła…" : "Checking password…";
-    let judgeLogin;
-    try {
-        judgeLogin = await guardPost("/auth/judge", { nick, password });
-    } catch (err) {
-        if (err.code === "invalid_password") {
-            passInput.classList.add("input-error");
-            if (errorEl) errorEl.style.display = "block";
-            statusEl.textContent = langData[currentLang].externalJudgePasswordError;
-        } else {
-            statusEl.textContent = err.message;
-        }
-        return;
-    }
-    passInput.classList.remove("input-error");
-    if (errorEl) errorEl.style.display = "none";
-    loginGateBusy = true;
-    try {
-        // Sesja sędziego trwa do zamknięcia karty/przeglądarki (jak wcześniej) i najwyżej tyle, ile ustawiono w Workerze.
-        await fbAuth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
-        await fbAuth.signInWithCustomToken(judgeLogin.firebaseToken);
-    } catch (err) {
-        loginGateBusy = false;
-        statusEl.textContent = (currentLang === 'pl' ? "Nie udało się zalogować: " : "Login failed: ") + err.message;
-        return;
-    }
-    passInput.value = "";
-    statusEl.textContent = currentLang === 'pl' ? "Zalogowano — wczytywanie panelu…" : "Logged in — loading the panel…";
-    // Przeładowanie: dane wczytają się już z sesją sędziego, a restoreExternalJudgeSession() otworzy panel.
-    location.reload();
-}
-
-// Przywraca sesję sędziego po odświeżeniu strony — na podstawie sesji Firebase wydanej przez Workera
-// (wcześniej wystarczyło wpisać dane do sessionStorage, żeby wejść do panelu).
-async function restoreExternalJudgeSession() {
-    await authReady;
-    if (isAdminAuthenticated || !fbAuth || !fbAuth.currentUser || fbClaims.judge !== true) return;
-    if (!(Number(fbClaims.judgeUntil) > Date.now())) {
-        try { await fbAuth.signOut(); } catch (e) {}
-        return;
-    }
-    loggedInSteward = {
-        nick: String(fbClaims.nick || (currentLang === 'pl' ? "Sędzia" : "Judge")),
-        id: "external-judge",
-        role: langData[currentLang].externalJudgeRole,
-        permissions: EXTERNAL_JUDGE_PERMISSIONS
-    };
-    finalizeAutoLogin();
 }
 
 async function handleDiscordOAuthRedirect() {
@@ -6712,7 +6769,7 @@ function fetchAndRenderHistory(discordId) {
         return;
     }
 
-    if (isAdminAuthenticated) {
+    if (isAdminAuthenticated && canOpenTrash()) {
         const adminDeleteWrap = document.createElement("div");
         adminDeleteWrap.style.cssText = "margin-bottom:14px; text-align:right;";
         adminDeleteWrap.innerHTML = `
@@ -6779,7 +6836,7 @@ function fetchAndRenderHistory(discordId) {
             ${(hasEvidence(r) && !r.decisionData) ? `<p style="margin:6px 0 0 0; font-size:12px;"><strong>Dowód:</strong> ${renderEvidenceHtml(r)}</p>` : ''}
             ${decisionBlock}
             <div style="margin-top:10px; display:flex; justify-content:flex-end; gap:6px;">
-                ${isAdminAuthenticated ? `<button type="button" class="btn-danger" style="padding:5px 12px; font-size:11px;" onclick="adminDeleteSingleReport('${jsAttr(r.id)}', '${jsAttr(discordId)}')">🗑️ ${currentLang === 'pl' ? 'Usuń (Admin)' : 'Delete (Admin)'}</button>` : ''}
+                ${(isAdminAuthenticated && canOpenTrash()) ? `<button type="button" class="btn-danger" style="padding:5px 12px; font-size:11px;" onclick="adminDeleteSingleReport('${jsAttr(r.id)}', '${jsAttr(discordId)}')">🗑️ ${currentLang === 'pl' ? 'Usuń (Admin)' : 'Delete (Admin)'}</button>` : ''}
                 <button type="button" class="btn-success" style="padding:5px 12px; font-size:11px;" onclick="selectPlayerChatCase('${jsAttr(r.id)}')">💬 Czatuj o tej sprawie</button>
             </div>
         `;
@@ -6840,7 +6897,7 @@ function fetchAndRenderHistory(discordId) {
                 ${hasEvidence(a) ? `<p style="margin:6px 0 0 0; font-size:12px;"><strong>Dowód:</strong> ${renderEvidenceHtml(a)}</p>` : ''}
                 ${userAppVerdictBlock}
                 <div style="margin-top:10px; display:flex; justify-content:flex-end; gap:6px;">
-                    ${isAdminAuthenticated ? `<button type="button" class="btn-danger" style="padding:5px 12px; font-size:11px;" onclick="adminDeleteSingleAppeal('${jsAttr(a.id)}', '${jsAttr(discordId)}')">🗑️ ${currentLang === 'pl' ? 'Usuń (Admin)' : 'Delete (Admin)'}</button>` : ''}
+                    ${(isAdminAuthenticated && canOpenTrash()) ? `<button type="button" class="btn-danger" style="padding:5px 12px; font-size:11px;" onclick="adminDeleteSingleAppeal('${jsAttr(a.id)}', '${jsAttr(discordId)}')">🗑️ ${currentLang === 'pl' ? 'Usuń (Admin)' : 'Delete (Admin)'}</button>` : ''}
                     <button type="button" class="btn-success" style="padding:5px 12px; font-size:11px;" onclick="selectPlayerChatCase('${jsAttr(a.appealId)}')">💬 Czatuj o tej apelacji</button>
                 </div>
             `;
@@ -7277,7 +7334,7 @@ function renderAdmin() {
                 <td class="col-cb" style="text-align:center;"><input type="checkbox" class="admin-row-cb" data-id="${escapeHtml(r.id)}" onclick="updateBulkActionsBar()"></td>
                 <td>
                     <strong style="color:var(--text);">${escapeHtml(r.id)}</strong>${caseBadgesHtml(r)}
-                    ${(loggedInSteward && (loggedInSteward.role === "Steward" || loggedInSteward.id === "external-judge")) ? '' : `<button title="${currentLang === 'pl' ? 'Edytuj ID' : 'Edit ID'}" style="background:transparent; border:1px solid var(--border); color:var(--text-dim); border-radius:4px; padding:1px 6px; font-size:11px; cursor:pointer; margin-left:4px;" onclick="editIncidentId('${jsAttr(r.id)}')">✎</button>`}
+                    ${(!canRenameIncidents()) ? '' : `<button title="${currentLang === 'pl' ? 'Edytuj ID' : 'Edit ID'}" style="background:transparent; border:1px solid var(--border); color:var(--text-dim); border-radius:4px; padding:1px 6px; font-size:11px; cursor:pointer; margin-left:4px;" onclick="editIncidentId('${jsAttr(r.id)}')">✎</button>`}
                 </td>
                 <td style="font-size:11px; color:var(--text-dim); white-space:nowrap;">${formatTimestamp(r.timestamp)}</td>
                 <td><strong>${escapeHtml(r.nick)}</strong><br><span style="color:var(--text-dim); font-size:10px;">ID: ${escapeHtml(r.discordId)}</span></td>
@@ -7464,8 +7521,8 @@ async function saveModalNotes() {
     const newNotes = document.getElementById("modalNotesField").value;
     const truncateNotes = (s, n = 300) => (s && s.length > n) ? s.slice(0, n) + "…" : (s || "(puste)");
 
-    await database.ref("incidents/" + currentlyEditedReportId + "/notes").set(newNotes);
-    await logAction(loggedInSteward ? loggedInSteward.nick : "ADMIN", "VERDICT", currentlyEditedReportId, `Zaktualizowano notatki wewnętrzne do zgłoszenia. Przed: "${truncateNotes(oldNotes)}" → Po: "${truncateNotes(newNotes)}"`, { items: [{ path: `incidents/${currentlyEditedReportId}/notes`, data: oldNotes || null }] });
+    await database.ref(privatePath(currentlyEditedReportId, "notes")).set(newNotes);
+    await logAction(loggedInSteward ? loggedInSteward.nick : "ADMIN", "VERDICT", currentlyEditedReportId, `Zaktualizowano notatki wewnętrzne do zgłoszenia. Przed: "${truncateNotes(oldNotes)}" → Po: "${truncateNotes(newNotes)}"`, { items: [{ path: privatePath(currentlyEditedReportId, "notes"), data: oldNotes || null }] });
     alert(currentLang === 'pl' ? "Zapisano." : "Saved.");
     closeDescModal();
 }
@@ -7840,12 +7897,12 @@ async function updateStatus(id, newStatus) {
     const oldNotes = item.notes || null;
     const updates = {};
     updates[`incidents/${id}/status`] = newStatus;
-    if (reason) updates[`incidents/${id}/notes`] = reason;
+    if (reason) updates[privatePath(id, "notes")] = reason;
     await database.ref().update(updates);
 
     const stewardNameUS = loggedInSteward ? loggedInSteward.nick : "System";
     const restoreItemsUS = [{ path: `incidents/${id}/status`, data: oldStatus }];
-    if (reason) restoreItemsUS.push({ path: `incidents/${id}/notes`, data: oldNotes });
+    if (reason) restoreItemsUS.push({ path: privatePath(id, "notes"), data: oldNotes });
     await logAction(stewardNameUS, "VERDICT", id, `Zmieniono status zgłoszenia z "${item.status || "brak"}" na "${newStatus}".` + (reason ? ` Uzasadnienie: ${reason}` : ""), { items: restoreItemsUS });
 
     const embed = {
@@ -7981,7 +8038,7 @@ async function editIncidentId(oldId) {
         return;
     }
     
-    if (loggedInSteward && (loggedInSteward.role === "Steward" || loggedInSteward.id === "external-judge")) {
+    if (!canRenameIncidents()) {
         alert(currentLang === 'pl' ? "Twoja rola nie pozwala na edycję ID zgłoszenia." : "Your role does not allow editing the report ID.");
         return;
     }
@@ -8023,8 +8080,9 @@ async function editIncidentId(oldId) {
     try {
         const { id: _drop, ...data } = report;
         const updates = {};
-        updates[`incidents/${newId}`] = data;
+        splitIncidentUpdates(newId, data, updates);
         updates[`incidents/${oldId}`] = null;
+        updates[`${PRIVATE_NODE}/${oldId}`] = null;
 
         relatedAppeals.forEach(a => {
             updates[`appeals/${a.id}/caseId`] = newId;
@@ -8054,7 +8112,7 @@ async function deleteReport(id) {
             const { id: _drop, ...data } = report;
             await moveToTrash("incident", id, data);
         }
-        await database.ref("incidents/" + id).remove();
+        await database.ref().update({ [`incidents/${id}`]: null, [`${PRIVATE_NODE}/${id}`]: null });
     } catch (err) {
         alert((currentLang === 'pl' ? "Błąd podczas usuwania zgłoszenia: " : "Error deleting report: ") + err.message);
     }
@@ -8341,7 +8399,7 @@ async function resendAppealVerdict(appealId) {
 
 
 async function adminDeleteSingleReport(id, discordId) {
-    if (!isAdminAuthenticated) {
+    if (!isAdminAuthenticated || !canOpenTrash()) {
         alert(currentLang === 'pl' ? "Brak uprawnień — tylko administrator może usuwać wpisy z historii." : "Not authorized — only an admin can delete history entries.");
         return;
     }
@@ -8356,7 +8414,7 @@ async function adminDeleteSingleReport(id, discordId) {
     try {
         const { id: _drop, ...data } = report;
         await moveToTrash("incident", id, data);
-        await database.ref("incidents/" + id).remove();
+        await database.ref().update({ [`incidents/${id}`]: null, [`${PRIVATE_NODE}/${id}`]: null });
         if (discordId) fetchAndRenderHistory(discordId);
     } catch (err) {
         alert((currentLang === 'pl' ? "Błąd podczas usuwania: " : "Error deleting: ") + err.message);
@@ -8364,7 +8422,7 @@ async function adminDeleteSingleReport(id, discordId) {
 }
 
 async function adminDeleteSingleAppeal(id, discordId) {
-    if (!isAdminAuthenticated) {
+    if (!isAdminAuthenticated || !canOpenTrash()) {
         alert(currentLang === 'pl' ? "Brak uprawnień — tylko administrator może usuwać wpisy z historii." : "Not authorized — only an admin can delete history entries.");
         return;
     }
@@ -8387,7 +8445,7 @@ async function adminDeleteSingleAppeal(id, discordId) {
 }
 
 async function adminDeleteAllHistory(discordId) {
-    if (!isAdminAuthenticated) {
+    if (!isAdminAuthenticated || !canOpenTrash()) {
         alert(currentLang === 'pl' ? "Brak uprawnień — tylko administrator może usunąć całą historię." : "Not authorized — only an admin can delete the entire history.");
         return;
     }
@@ -8411,6 +8469,7 @@ async function adminDeleteAllHistory(discordId) {
             const { id: _drop, ...data } = r;
             await moveToTrash("incident", r.id, data);
             updates[`incidents/${r.id}`] = null;
+            updates[`${PRIVATE_NODE}/${r.id}`] = null;
         }
         for (const a of appeals) {
             const { id: _drop, ...data } = a;
@@ -8471,9 +8530,9 @@ async function bulkStatusUpdate(newStatus) {
         const report = globalIncidents.find(r => r.id === id);
         changedIds.push(`${id} (${report ? (report.status || "brak") : "?"}→${newStatus})`);
         restoreItemsBulk.push({ path: `incidents/${id}/status`, data: report ? (report.status || null) : null });
-        if (reason) restoreItemsBulk.push({ path: `incidents/${id}/notes`, data: report ? (report.notes || null) : null });
+        if (reason) restoreItemsBulk.push({ path: privatePath(id, "notes"), data: report ? (report.notes || null) : null });
         updates[`incidents/${id}/status`] = newStatus;
-        if (reason) updates[`incidents/${id}/notes`] = `Odrzucono masowo: ${reason}`;
+        if (reason) updates[privatePath(id, "notes")] = `Odrzucono masowo: ${reason}`;
     }
     await database.ref().update(updates);
     const stewardNameBulk = loggedInSteward ? loggedInSteward.nick : "System";
@@ -8497,6 +8556,7 @@ async function bulkDelete() {
                 await moveToTrash("incident", id, data);
             }
             updates[`incidents/${id}`] = null;
+            updates[`${PRIVATE_NODE}/${id}`] = null;
         }
         await database.ref().update(updates);
         document.getElementById("selectAllCheckboxes").checked = false;
@@ -8694,11 +8754,11 @@ document.getElementById("responseForm").addEventListener("submit", async (e) => 
     if (mainReport) {
         restoreItemsVerdict.push(
             { path: `incidents/${originalCaseId}/status`, data: mainReport.status || null },
-            { path: `incidents/${originalCaseId}/notes`, data: mainReport.notes || null },
+            { path: privatePath(originalCaseId, "notes"), data: mainReport.notes || null },
             { path: `incidents/${originalCaseId}/decisionData`, data: cloneForRestore(mainReport.decisionData) }
         );
         await database.ref("incidents/" + originalCaseId + "/status").set("Werdykt wydany");
-        await database.ref("incidents/" + originalCaseId + "/notes").set(`[Werdykt]: ${decision} | ${timePenalty} | Uzasadnienie: ${verdictDetails}`);
+        await database.ref(privatePath(originalCaseId, "notes")).set(`[Werdykt]: ${decision} | ${timePenalty} | Uzasadnienie: ${verdictDetails}`);
         await database.ref("incidents/" + originalCaseId + "/decisionData").set(decisionDataToSave);
     }
 
@@ -9448,7 +9508,7 @@ async function restoreTrashItem(trashId) {
     if (!confirm(currentLang === 'pl' ? "Przywrócić ten element z kosza?" : "Restore this item from trash?")) return;
     try {
         if (item.type === "incident") {
-            await database.ref("incidents/" + item.originalId).set(item.data);
+            await database.ref().update(splitIncidentUpdates(item.originalId, item.data));
         } else if (item.type === "appeal") {
             await database.ref("appeals/" + item.originalId).set(item.data);
         } else if (item.type === "chat_bulk") {
@@ -9484,7 +9544,7 @@ async function restoreAllTrash() {
     for (const item of globalTrash) {
         try {
             if (item.type === "incident") {
-                await database.ref("incidents/" + item.originalId).set(item.data);
+                await database.ref().update(splitIncidentUpdates(item.originalId, item.data));
             } else if (item.type === "appeal") {
                 await database.ref("appeals/" + item.originalId).set(item.data);
             } else if (item.type === "chat_bulk") {
@@ -9920,6 +9980,7 @@ function listenToUsersAndLogs() {
     listenToStewards();
     listenToTrash();
     listenToActionLogs();
+    listenToIncidentPrivate();
 }
 
 let pendingAutoLoginId = null;
@@ -10242,19 +10303,25 @@ async function performLogRestore(log) {
         alert(currentLang === 'pl' ? "Brak uprawnień do przywracania danych z logów." : "Not authorized to restore data from logs.");
         return false;
     }
+    const items = restorableItemsOf(log);
+    if (!items) return false;
+    const fromDriver = isDriverLog(log);
 
     const dateStr = new Date(log.timestamp).toLocaleString("pl-PL");
     const confirmMsg = currentLang === 'pl'
         ? `Czy na pewno chcesz przywrócić stan sprzed tej akcji (${dateStr})?\n\n"${log.details}"\n\nSpowoduje to nadpisanie aktualnych danych stanem zapisanym w logu.`
         : `Are you sure you want to restore the state from before this action (${dateStr})?\n\n"${log.details}"\n\nThis will overwrite the current data with the state saved in the log.`;
-    if (!confirm(confirmMsg)) return false;
+    const driverNote = fromDriver
+        ? (currentLang === 'pl' ? "⚠️ Ten wpis zapisał KIEROWCA, nie steward. Przywrócone zostaną tylko bezpieczne elementy.\n\n" : "⚠️ This entry was written by a DRIVER. Only safe items will be restored.\n\n")
+        : "";
+    if (!confirm(driverNote + confirmMsg)) return false;
 
     try {
         const updates = {};
-        log.restore.items.forEach(it => {
-            updates[it.path] = (it.data === undefined) ? null : it.data;
+        items.forEach(it => {
+            mapRestoreItem(it.path, (it.data === undefined) ? null : it.data, updates);
         });
-        await database.ref().update(updates);
+        await database.ref().update(collapseNestedUpdates(updates));
 
         const stewardName = loggedInSteward ? loggedInSteward.nick : "ADMIN";
         await logAction(stewardName, "RESTORE", log.targetId, currentLang === 'pl'
@@ -10528,7 +10595,10 @@ async function clearAllLogs() {
             archiveUpdates[log.id] = cloneForRestore(rest);
         });
         await database.ref("deleted_action_logs").update(archiveUpdates);
-        await database.ref("action_logs").remove();
+        // Wpis po wpisie — reguły bazy pozwalają usunąć wpis Dziennika dopiero, gdy jego kopia jest w archiwum.
+        const removeUpdates = {};
+        globalLogs.forEach(log => { removeUpdates[`action_logs/${log.id}`] = null; });
+        await database.ref().update(removeUpdates);
     } catch (err) {
         alert((currentLang === 'pl' ? "Błąd podczas czyszczenia logów: " : "Error clearing logs: ") + err.message);
     }
@@ -10537,6 +10607,10 @@ async function clearAllLogs() {
 // Trwałe (nieodwracalne) usunięcie pojedynczego wpisu z archiwum skasowanych logów -
 // dopiero to naprawdę kasuje możliwość przywrócenia danych z tego wpisu.
 async function permanentlyDeleteDeletedLog(logId) {
+    if (!stewardIsRootLike()) {
+        alert(currentLang === 'pl' ? "Trwałe usuwanie z archiwum logów wymaga roli Głównego Stewarda / ROOT." : "Permanently deleting archived logs requires Lead Steward / ROOT.");
+        return;
+    }
     if (!confirm(currentLang === 'pl'
         ? "Usunąć ten wpis TRWALE z archiwum skasowanych logów? Po tej operacji NIE będzie już można przywrócić z niego danych."
         : "Permanently delete this entry from the deleted-logs archive? After this, its data can NO LONGER be restored.")) return;
@@ -10549,6 +10623,10 @@ async function permanentlyDeleteDeletedLog(logId) {
 
 // Trwałe opróżnienie całego archiwum skasowanych logów.
 async function permanentlyClearDeletedLogs() {
+    if (!stewardIsRootLike()) {
+        alert(currentLang === 'pl' ? "Trwałe usuwanie z archiwum logów wymaga roli Głównego Stewarda / ROOT." : "Permanently deleting archived logs requires Lead Steward / ROOT.");
+        return;
+    }
     if (globalDeletedLogs.length === 0) return;
     if (!confirm(currentLang === 'pl'
         ? `Czy na pewno chcesz TRWALE opróżnić archiwum skasowanych logów (${globalDeletedLogs.length} wpisów)? Tej operacji NIE MOŻNA cofnąć.`
@@ -10611,7 +10689,7 @@ function renderDeletedLogsTable() {
             <td>${catBadge}</td>
             <td><code style="color:var(--amber-text);">${escapeHtml(log.targetId)}</code></td>
             <td><div class="cell-wrap" style="max-height:none; font-size:11px; line-height:1.3;">${escapeHtml(log.details)}</div></td>
-            <td style="white-space:nowrap;">${restoreBtn}${canManageLogs ? `<button class="btn-danger" style="padding:3px 8px; font-size:10px;" onclick="permanentlyDeleteDeletedLog('${jsAttr(log.id)}')">✕ ${currentLang === 'pl' ? 'Usuń na stałe' : 'Delete forever'}</button>` : ''}</td>
+            <td style="white-space:nowrap;">${restoreBtn}${stewardIsRootLike() ? `<button class="btn-danger" style="padding:3px 8px; font-size:10px;" onclick="permanentlyDeleteDeletedLog('${jsAttr(log.id)}')">✕ ${currentLang === 'pl' ? 'Usuń na stałe' : 'Delete forever'}</button>` : ''}</td>
         `;
         tbody.appendChild(tr);
     });
@@ -10685,8 +10763,6 @@ window.addEventListener("DOMContentLoaded", () => {
         // Świeże logowanie do panelu (strona przeładowana po powrocie z Discorda) — pokaż komunikat, jeśli to nie steward.
         try { pendingAutoLoginIsDiscordAttempt = sessionStorage.getItem("adminLoginAttempt") === "1"; sessionStorage.removeItem("adminLoginAttempt"); } catch (e) {}
         tryAutoLogin();
-        // Sesja sędziego spoza ligi (hasło sprawdzone wcześniej przez Workera).
-        restoreExternalJudgeSession();
     }
     updateJudgeFieldFromSession();
 
@@ -10698,9 +10774,12 @@ window.addEventListener("DOMContentLoaded", () => {
     let knownIncidentIds = null;
     let knownAppealIds = null;
 
-    database.ref("incidents").on("value", (snapshot) => {
+    const onIncidentsValue = (snapshot) => {
+        lastIncidentsSnapshot = snapshot;
         globalIncidents = [];
         snapshot.forEach(child => { globalIncidents.push({ id: child.key, ...child.val() }); });
+        mergeIncidentPrivate(globalIncidents);
+        migrateLegacyPrivateFields();
         const currentIncidentIds = new Set(globalIncidents.map(r => r.id));
         if (knownIncidentIds) {
             globalIncidents.forEach(r => {
@@ -10721,9 +10800,13 @@ window.addEventListener("DOMContentLoaded", () => {
             const statsSecEl = document.getElementById("statsSection");
             if (statsSecEl && statsSecEl.classList.contains("active")) renderStats();
         }
-    });
+        syncScopedChat();
+    };
+    database.ref("incidents").on("value", onIncidentsValue);
+    // Po zmianie notatek/głosów (incident_private) przeliczamy widok z ostatnich danych zgłoszeń.
+    window.rzRerenderIncidents = () => { if (lastIncidentsSnapshot) onIncidentsValue(lastIncidentsSnapshot); };
 
-    database.ref("appeals").on("value", (snapshot) => {
+    const onAppealsValue = (snapshot) => {
         globalAppeals = [];
         snapshot.forEach(child => { globalAppeals.push({ id: child.key, ...child.val() }); });
         const currentAppealIds = new Set(globalAppeals.map(a => a.id));
@@ -10745,19 +10828,25 @@ window.addEventListener("DOMContentLoaded", () => {
             const statsSecEl2 = document.getElementById("statsSection");
             if (statsSecEl2 && statsSecEl2.classList.contains("active")) renderStats();
         }
-    });
+        syncScopedChat();
+    };
+    // Zespół czyta wszystkie apelacje. Kierowcy reguły bazy pozwalają tylko na jego własne
+    // (zapytanie po discordId) — gdy pełny odczyt jest zabroniony, przechodzimy na zapytanie.
+    database.ref("appeals").on("value", onAppealsValue, () => authReady.then(() => {
+        const uid = currentUid();
+        if (!uid) return;
+        database.ref("appeals").orderByChild("discordId").equalTo(uid).on("value", onAppealsValue,
+            err => console.warn("Brak dostępu do apelacji:", err && err.message));
+    }));
 
     // Kosz wczytywany jest dopiero po zalogowaniu do panelu (listenToTrash) — nie jest publiczny.
 
     loadSeasonSettings();
 
+    // Zespół czyta cały czat; kierowca — tylko wiadomości ze swoich spraw (syncScopedChat).
     database.ref("chat").on("value", (snapshot) => {
-        const data = snapshot.val();
-        globalChatData = data;
-
-        renderAdminChatBox();
-        renderPlayerChatBox();
-    });
+        applyChatData(snapshot.val());
+    }, () => authReady.then(() => { chatScoped = true; syncScopedChat(); }));
 
     initFormDropdowns();
     initAdminTrackFilter();
@@ -11735,7 +11824,7 @@ window.restoreAllFromLogs = async function () {
         const { parts, data } = best[k];
         if (exists(parts)) return;
         if (parts.length > 2 && !exists(parts.slice(0, 2))) return; // nie twórz „kawałków” nieistniejących obiektów
-        updates[k] = data;
+        mapRestoreItem(k, data, updates);
         restored.push(k);
         undoItems.push({ path: k, data: null });
         const kind = restorablePathKind(parts);
@@ -12197,7 +12286,7 @@ window.castStewardVote = async function () {
         pointsPenalty: showPts ? ($("pointsPenalty").value.trim() || "0 pkt") : "0 pkt",
         comment: comment.trim().slice(0, 300), ts: Date.now()
     };
-    const path = `incidents/${inc.id}/stewardVotes/${scope}/${key}`;
+    const path = privatePath(inc.id, `stewardVotes/${scope}/${key}`);
     if (prev) delete prev.key;
     await database.ref(path).set(vote);
     await logAction(loggedInSteward.nick, "VERDICT", inc.id, `Głos sędziowski${scope !== "main" ? " (" + scope + ")" : ""}: ${decision}${penaltyLabel(vote) ? " · " + penaltyLabel(vote) : ""}.`, { items: [{ path, data: prev }] });
@@ -12210,7 +12299,7 @@ window.removeStewardVote = async function () {
     const prev = votesFor(inc, scope).find(v => v.key === key);
     if (!prev || !confirm("Wycofać Twój głos w tej sprawie?")) return;
     delete prev.key;
-    const path = `incidents/${inc.id}/stewardVotes/${scope}/${key}`;
+    const path = privatePath(inc.id, `stewardVotes/${scope}/${key}`);
     await database.ref(path).remove();
     await logAction(loggedInSteward.nick, "VERDICT", inc.id, "Wycofano głos sędziowski.", { items: [{ path, data: prev }] });
 };
@@ -12490,7 +12579,7 @@ window.addEventListener("submit", e => {
 const MODAL_CLOSERS = {
     descModal: "closeDescModal", appealEditModal: "closeAppealEditModal", appealVerdictEditModal: "closeAppealVerdictEditModal",
     logVerdictPreviewModal: "closeLogVerdictPreview", reportPreviewModal: "closeReportPreview", bulletinModal: "closeBulletin",
-    adminLoginModal: "closeAdminLogin", externalJudgeModal: "closeExternalJudgeLogin"
+    adminLoginModal: "closeAdminLogin"
 };
 const isTyping = el => el && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
 document.addEventListener("keydown", e => {
@@ -13693,7 +13782,7 @@ async function importBackup(file) {
     if (!newInc.length && !newApp.length) return alert(`Wszystkie rekordy z kopii (${inc.length} zgłoszeń, ${app.length} apelacji) już istnieją w bazie — nic do importu.`);
     if (!confirm(`Kopia z: ${data.exportDate || "?"}\n\nDo dodania: ${newInc.length} ${plural(newInc.length, "zgłoszenie", "zgłoszenia", "zgłoszeń")} i ${newApp.length} ${plural(newApp.length, "apelacja", "apelacje", "apelacji")}.\nPominięte (już istnieją): ${inc.length - newInc.length + app.length - newApp.length}.\n\nIstniejące dane NIE zostaną nadpisane. Kontynuować?`)) return;
     const updates = {}, undo = [];
-    newInc.forEach(({ id, ...rest }) => { updates[`incidents/${id}`] = rest; undo.push({ path: `incidents/${id}`, data: null }); });
+    newInc.forEach(({ id, ...rest }) => { splitIncidentUpdates(id, rest, updates); undo.push({ path: `incidents/${id}`, data: null }); });
     newApp.forEach(({ id, ...rest }) => { updates[`appeals/${id}`] = rest; undo.push({ path: `appeals/${id}`, data: null }); });
     try {
         await database.ref().update(updates);
@@ -15172,7 +15261,7 @@ const DB_NAMES = {
     voiceSignals: "Dawne kanały głosowe — sygnalizacja (do usunięcia)", incident_counter: "Licznik numerów zgłoszeń",
     appeal_counter: "Licznik numerów apelacji", counters: "Liczniki", chat: "Czat", chats: "Czaty",
     textOverrides: "Zmienione teksty strony", appearance: "Wygląd", announcement: "Ogłoszenie",
-    presence: "Kto co robi (obecność na żywo)", reportWindow: "Dawna ręczna blokada zgłoszeń (nieużywane — do usunięcia)", reportSchedule: "Harmonogram otwierania zgłoszeń", season: "Sezon", calendar: "Kalendarz", suspensions: "Zawieszenia",
+    presence: "Kto co robi (obecność na żywo)", incident_private: "Notatki wewnętrzne i głosy sędziów", reportWindow: "Dawna ręczna blokada zgłoszeń (nieużywane — do usunięcia)", reportSchedule: "Harmonogram otwierania zgłoszeń", season: "Sezon", calendar: "Kalendarz", suspensions: "Zawieszenia",
     voting: "Głosowanie", bulletin: "Biuletyn", permissions: "Uprawnienia", statements: "Oświadczenia stron",
     customFields: "Rubryki formularzy / dodatkowe rubryki"
 };
@@ -18747,7 +18836,6 @@ window.rzPresence = { detect, tick, renderPanel, people };
     <div class="rz-gate-actions">
       <button type="button" id="rzGateDriverBtn" class="discord-login-btn" onclick="loginWithDiscord()"><span id="rzGateDriverLabel">Zaloguj przez Discord</span></button>
       <button type="button" id="rzGateStewardBtn" class="btn-secondary" onclick="loginWithDiscordAdmin()">Panel stewarda (Discord)</button>
-      <button type="button" id="rzGateJudgeBtn" class="btn-secondary" onclick="openExternalJudgeLogin()">Sędzia spoza ligi (hasło)</button>
     </div>
     <div class="rz-gate-spinner" aria-hidden="true"></div>
   </div>
