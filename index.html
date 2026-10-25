@@ -2,6 +2,16 @@
 <html lang="pl">
 <head>
   <meta charset="UTF-8" />
+  <!-- Ochrona przed osadzeniem strony w cudzej ramce (clickjacking): strona pokazuje się tylko jako główne okno. -->
+  <style id="rzAntiFrame">html{display:none !important;}</style>
+  <script>
+    (function () {
+      try {
+        if (window.self === window.top) { var s = document.getElementById("rzAntiFrame"); if (s) s.parentNode.removeChild(s); }
+        else { window.top.location = window.self.location.href; }
+      } catch (e) { /* ramka z innej domeny bez dostępu do okna nadrzędnego — strona zostaje ukryta */ }
+    })();
+  </script>
   <title>Zgłoś Incydent – Racing Zone</title>
   <style id="embeddedFonts">
 /* Czcionki wbudowane w stronę (zamiast fonts.googleapis.com) — pakiety @fontsource 5.3.0.
@@ -4214,6 +4224,26 @@ async function stampRateLimit(kind, id) {
     }
 }
 
+// Kolejny numer sprawy: licznik +1 razem ze znacznikiem rate/<uid>/<rodzaj> w jednym zapisie
+// (reguły bazy dają jeden numer na 30 s na osobę, więc licznika nie da się „podbijać” bez zgłoszeń).
+async function takeNextNumber(counterPath, stampKind) {
+    const uid = currentUid();
+    if (!uid) throw new Error(uiIsPl() ? "Sesja logowania wygasła — zaloguj się ponownie przez Discord." : "Your session has expired — log in again with Discord.");
+    let lastErr = null;
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const cur = (await database.ref(counterPath).once("value")).val();
+        const next = (typeof cur === "number" ? cur : 0) + 1;
+        try {
+            await database.ref().update({ [counterPath]: next, [`rate/${uid}/${stampKind}`]: { at: firebase.database.ServerValue.TIMESTAMP, n: next } });
+            return next;
+        } catch (err) {
+            lastErr = err; // ktoś wziął ten numer w tej samej chwili — próbujemy z następnym
+            await new Promise(res => setTimeout(res, 300 + Math.random() * 600));
+        }
+    }
+    throw new Error(uiIsPl() ? "Nie udało się nadać numeru — odczekaj pół minuty i spróbuj ponownie." : "Could not assign a number — wait half a minute and try again.");
+}
+
 function friendlyWriteError(err, prefix) {
     const code = String((err && (err.code || err.message)) || "").toUpperCase();
     let msg = err && err.message ? err.message : String(err);
@@ -4580,7 +4610,9 @@ async function getFreshEvidenceUrl(key, expiresIn) {
 
     let url, actualTtl;
     if (String(key).startsWith(R2_LEGACY_PREFIX)) {
-        // Plik sprzed zmiany — leży w poprzednim magazynie.
+        // Plik sprzed zmiany — leży w poprzednim magazynie. Token logowania idzie w treści zapytania
+        // (bez nowych nagłówków), żeby stary Worker mógł go sprawdzać i nie wydawał linków każdemu.
+        try { const u = fbAuth && fbAuth.currentUser; if (u) body.idToken = await u.getIdToken(); } catch (e) {}
         const res = await fetch(`${R2_WORKER_URL}/presign-get`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -4909,6 +4941,12 @@ function renderEvidenceHtml(record, linkLabel, emptyLabel) {
         }
 
         const src = f.url || f.data;
+        // Podgląd wczytujemy tylko z pliku zapisanego w samej stronie (data:/blob:). Obcy adres to zwykły link —
+        // inaczej sam podgląd zdradziłby autorowi „dowodu” adres IP i godzinę otwarcia sprawy przez stewarda.
+        if ((type.startsWith("image/") || type.startsWith("video/")) && !/^(data:(image|video)\/|blob:)/i.test(String(src || ""))) {
+            linkParts.push(`<a class="evidence-link" href="${escapeHtml(safeHref(src))}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">${type.startsWith("image/") ? "🖼️" : "🎬"} ${escapeHtml(caption)}</a>`);
+            return;
+        }
         if (type.startsWith("image/")) {
             galleryParts.push(`
                 <a href="${escapeHtml(safeHref(src))}" target="_blank" rel="noopener" title="${escapeHtml(caption)}" class="evidence-media-link">
@@ -4957,6 +4995,12 @@ function renderChatFilesHtml(files) {
         }
 
         const src = f.url || f.data;
+        // Podgląd wczytujemy tylko z pliku zapisanego w samej stronie (data:/blob:). Obcy adres to zwykły link —
+        // inaczej sam podgląd zdradziłby autorowi „dowodu” adres IP i godzinę otwarcia sprawy przez stewarda.
+        if ((type.startsWith("image/") || type.startsWith("video/")) && !/^(data:(image|video)\/|blob:)/i.test(String(src || ""))) {
+            linkParts.push(`<a class="evidence-link" href="${escapeHtml(safeHref(src))}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">${type.startsWith("image/") ? "🖼️" : "🎬"} ${escapeHtml(caption)}</a>`);
+            return;
+        }
         if (type.startsWith("image/")) {
             galleryParts.push(`
                 <a href="${escapeHtml(safeHref(src))}" target="_blank" rel="noopener" title="${escapeHtml(caption)}" class="evidence-media-link">
@@ -4995,6 +5039,11 @@ let globalChatData = null;
 // ============================================================
 const PRIVATE_NODE = "incident_private";
 const PRIVATE_INCIDENT_FIELDS = ["notes", "stewardVotes"];
+// Oświadczenia stron: incident_statements/<sprawa>/<Discord ID>. Czyta je zespół i sam autor
+// (druga strona i inni kierowcy już nie), więc też nie leżą w publicznym zgłoszeniu.
+const STATEMENTS_NODE = "incident_statements";
+let globalIncidentStatements = {};
+let incidentStatementsLoaded = false;
 let globalIncidentPrivate = {};
 let lastIncidentsSnapshot = null;
 let incidentPrivateLoaded = false;
@@ -5006,6 +5055,10 @@ function mergeIncidentPrivate(list) {
         if (!p) return;
         PRIVATE_INCIDENT_FIELDS.forEach(f => { if (p[f] !== undefined && p[f] !== null) r[f] = p[f]; });
     });
+    (list || []).forEach(r => {
+        const st = globalIncidentStatements[r.id];
+        if (st && typeof st === "object" && Object.keys(st).length) r.statements = Object.assign({}, r.statements || {}, st);
+    });
 }
 
 // Zapis całego zgłoszenia (przywracanie, zmiana ID, import) — część wewnętrzna idzie do incident_private.
@@ -5014,6 +5067,7 @@ function splitIncidentUpdates(id, data, updates) {
     if (data === null || data === undefined) {
         updates[`incidents/${id}`] = null;
         updates[`${PRIVATE_NODE}/${id}`] = null;
+        updates[`${STATEMENTS_NODE}/${id}`] = null;
         return updates;
     }
     const pub = Object.assign({}, data), priv = {};
@@ -5022,8 +5076,11 @@ function splitIncidentUpdates(id, data, updates) {
         if (pub[f] !== undefined && pub[f] !== null && pub[f] !== "") priv[f] = pub[f];
         delete pub[f];
     });
+    const statements = pub.statements && typeof pub.statements === "object" ? pub.statements : null;
+    delete pub.statements;
     updates[`incidents/${id}`] = pub;
     updates[`${PRIVATE_NODE}/${id}`] = Object.keys(priv).length ? priv : null;
+    updates[`${STATEMENTS_NODE}/${id}`] = statements && Object.keys(statements).length ? statements : null;
     return updates;
 }
 
@@ -5032,6 +5089,11 @@ function mapRestoreItem(path, data, updates) {
     const m = /^incidents\/([^/]+)(?:\/(.+))?$/.exec(String(path || ""));
     if (m && !m[2]) return splitIncidentUpdates(m[1], data, updates);
     if (m && PRIVATE_INCIDENT_FIELDS.includes(m[2].split("/")[0])) { updates[`${PRIVATE_NODE}/${m[1]}/${m[2]}`] = data; return updates; }
+    if (m && m[2].split("/")[0] === "statements") {
+        const rest = m[2].split("/").slice(1).join("/");
+        updates[`${STATEMENTS_NODE}/${m[1]}${rest ? "/" + rest : ""}`] = data;
+        return updates;
+    }
     updates[path] = data;
     return updates;
 }
@@ -5056,7 +5118,7 @@ function collapseNestedUpdates(updates) {
 // (robi to pierwsza osoba z zespołu, która otworzy panel po aktualizacji).
 let privateMigrationBusy = false, privateMigrationFailed = false;
 function migrateLegacyPrivateFields() {
-    if (!isAdminAuthenticated || !incidentPrivateLoaded || !lastIncidentsSnapshot || privateMigrationBusy || privateMigrationFailed) return;
+    if (!isAdminAuthenticated || !incidentPrivateLoaded || !incidentStatementsLoaded || !lastIncidentsSnapshot || privateMigrationBusy || privateMigrationFailed) return;
     const upd = {};
     let moved = 0;
     lastIncidentsSnapshot.forEach(ch => {
@@ -5073,11 +5135,17 @@ function migrateLegacyPrivateFields() {
             upd[`incidents/${id}/stewardVotes`] = null;
             moved++;
         }
+        if (v.statements && typeof v.statements === "object") {
+            const have = globalIncidentStatements[id] || {};
+            Object.entries(v.statements).forEach(([uid, st]) => { if (!have[uid]) upd[`${STATEMENTS_NODE}/${id}/${uid}`] = st; });
+            upd[`incidents/${id}/statements`] = null;
+            moved++;
+        }
     });
     if (!moved) return;
     privateMigrationBusy = true;
     database.ref().update(upd)
-        .then(() => console.info(`[bezpieczeństwo] Przeniesiono notatki wewnętrzne i głosy (${moved} pól) do ${PRIVATE_NODE}.`))
+        .then(() => console.info(`[bezpieczeństwo] Przeniesiono notatki, głosy i oświadczenia (${moved} pól) do węzłów tylko dla zespołu.`))
         .catch(err => { privateMigrationFailed = true; console.warn("Nie udało się przenieść notatek i głosów:", err && err.message); })
         .finally(() => { privateMigrationBusy = false; });
 }
@@ -5094,6 +5162,33 @@ function listenToIncidentPrivate() {
     }, err => {
         incidentPrivateListening = false;
         console.warn("Brak dostępu do notatek wewnętrznych:", err && err.message);
+    });
+}
+
+// Oświadczenia: zespół czyta cały węzeł; kierowca tylko swoje — incident_statements/<sprawa>/<jego ID>.
+let statementsScoped = false;
+const scopedStatementRefs = new Map();
+function applyStatementsData(data) {
+    globalIncidentStatements = data || {};
+    incidentStatementsLoaded = true;
+    if (typeof window.rzRerenderIncidents === "function") window.rzRerenderIncidents();
+    migrateLegacyPrivateFields();
+}
+function syncScopedStatements() {
+    if (!statementsScoped) return;
+    const uid = currentUid();
+    const want = new Set(uid ? (globalIncidents || []).filter(r => String(r.discordId) === uid || String(r.accusedDiscordId) === uid)
+        .map(r => String(r.id)).filter(id => /^[A-Za-z0-9_-]{1,40}$/.test(id)) : []);
+    scopedStatementRefs.forEach((ref, id) => { if (!want.has(id)) { ref.off(); scopedStatementRefs.delete(id); delete globalIncidentStatements[id]; } });
+    want.forEach(id => {
+        if (scopedStatementRefs.has(id)) return;
+        const ref = database.ref(`${STATEMENTS_NODE}/${id}/${uid}`);
+        scopedStatementRefs.set(id, ref);
+        ref.on("value", snap => {
+            const v = snap.val();
+            if (v) globalIncidentStatements[id] = { [uid]: v }; else delete globalIncidentStatements[id];
+            if (typeof window.rzRerenderIncidents === "function") window.rzRerenderIncidents();
+        }, err => { scopedStatementRefs.delete(id); console.warn(`Brak dostępu do oświadczenia w sprawie ${id}:`, err && err.message); });
     });
 }
 
@@ -5167,7 +5262,7 @@ function restorableItemsOf(log) {
         const p = String((it && it.path) || "");
         if (p === `incidents/${t}`) return !inc;
         if (p === `incidents/${t}/status` || p === `incidents/${t}/withdrawnAt` || p === `incidents/${t}/withdrawReason`) return !!inc && inc.status === "Wycofane";
-        return p.startsWith(`incidents/${t}/statements/`);
+        return p === `${STATEMENTS_NODE}/${t}/${log.uid}` || p.startsWith(`incidents/${t}/statements/`);
     });
     if (!ok.length) {
         alert(currentLang === 'pl'
@@ -6544,9 +6639,7 @@ document.getElementById("complaintForm").addEventListener("submit", async e => {
     }
 
     // Numer zgłoszenia nadawany atomowo (transakcja) — reguły bazy pozwalają kierowcy tylko na +1.
-    const counterTx = await database.ref("incident_counter").transaction(c => (typeof c === "number" ? c : 0) + 1);
-    if (!counterTx.committed) throw new Error(currentLang === 'pl' ? "Nie udało się nadać numeru zgłoszenia — spróbuj ponownie." : "Could not assign a report number — try again.");
-    const counter = counterTx.snapshot.val();
+    const counter = await takeNextNumber("incident_counter", "incCounter");
 
     const fiaId = "FIA-" + String(counter).padStart(4, '0');
 
@@ -6645,9 +6738,7 @@ document.getElementById("appealForm").addEventListener("submit", async e => {
         return;
     }
 
-    const appealCounterTx = await database.ref("appeal_counter").transaction(c => (typeof c === "number" ? c : 0) + 1);
-    if (!appealCounterTx.committed) throw new Error(currentLang === 'pl' ? "Nie udało się nadać numeru apelacji — spróbuj ponownie." : "Could not assign an appeal number — try again.");
-    const appealCounter = appealCounterTx.snapshot.val();
+    const appealCounter = await takeNextNumber("appeal_counter", "appCounter");
     const appealId = "APP-" + String(appealCounter).padStart(4, "0");
     const newAppeal = { appealId, caseId, nick, discordId, reason, evidence, status: "Nowa", timestamp: Date.now() };
 
@@ -8085,6 +8176,7 @@ async function editIncidentId(oldId) {
         splitIncidentUpdates(newId, data, updates);
         updates[`incidents/${oldId}`] = null;
         updates[`${PRIVATE_NODE}/${oldId}`] = null;
+        updates[`${STATEMENTS_NODE}/${oldId}`] = null;
 
         relatedAppeals.forEach(a => {
             updates[`appeals/${a.id}/caseId`] = newId;
@@ -8114,7 +8206,7 @@ async function deleteReport(id) {
             const { id: _drop, ...data } = report;
             await moveToTrash("incident", id, data);
         }
-        await database.ref().update({ [`incidents/${id}`]: null, [`${PRIVATE_NODE}/${id}`]: null });
+        await database.ref().update({ [`incidents/${id}`]: null, [`${PRIVATE_NODE}/${id}`]: null, [`${STATEMENTS_NODE}/${id}`]: null });
     } catch (err) {
         alert((currentLang === 'pl' ? "Błąd podczas usuwania zgłoszenia: " : "Error deleting report: ") + err.message);
     }
@@ -8416,7 +8508,7 @@ async function adminDeleteSingleReport(id, discordId) {
     try {
         const { id: _drop, ...data } = report;
         await moveToTrash("incident", id, data);
-        await database.ref().update({ [`incidents/${id}`]: null, [`${PRIVATE_NODE}/${id}`]: null });
+        await database.ref().update({ [`incidents/${id}`]: null, [`${PRIVATE_NODE}/${id}`]: null, [`${STATEMENTS_NODE}/${id}`]: null });
         if (discordId) fetchAndRenderHistory(discordId);
     } catch (err) {
         alert((currentLang === 'pl' ? "Błąd podczas usuwania: " : "Error deleting: ") + err.message);
@@ -8472,6 +8564,7 @@ async function adminDeleteAllHistory(discordId) {
             await moveToTrash("incident", r.id, data);
             updates[`incidents/${r.id}`] = null;
             updates[`${PRIVATE_NODE}/${r.id}`] = null;
+            updates[`${STATEMENTS_NODE}/${r.id}`] = null;
         }
         for (const a of appeals) {
             const { id: _drop, ...data } = a;
@@ -8559,6 +8652,7 @@ async function bulkDelete() {
             }
             updates[`incidents/${id}`] = null;
             updates[`${PRIVATE_NODE}/${id}`] = null;
+            updates[`${STATEMENTS_NODE}/${id}`] = null;
         }
         await database.ref().update(updates);
         document.getElementById("selectAllCheckboxes").checked = false;
@@ -10803,6 +10897,7 @@ window.addEventListener("DOMContentLoaded", () => {
             if (statsSecEl && statsSecEl.classList.contains("active")) renderStats();
         }
         syncScopedChat();
+        syncScopedStatements();
     };
     database.ref("incidents").on("value", onIncidentsValue);
     // Po zmianie notatek/głosów (incident_private) przeliczamy widok z ostatnich danych zgłoszeń.
@@ -10849,6 +10944,9 @@ window.addEventListener("DOMContentLoaded", () => {
     database.ref("chat").on("value", (snapshot) => {
         applyChatData(snapshot.val());
     }, () => authReady.then(() => { chatScoped = true; syncScopedChat(); }));
+    // Oświadczenia stron — zespół całość, kierowca tylko swoje.
+    database.ref(STATEMENTS_NODE).on("value", snap => applyStatementsData(snap.val()),
+        () => authReady.then(() => { statementsScoped = true; syncScopedStatements(); }));
 
     initFormDropdowns();
     initAdminTrackFilter();
@@ -13353,7 +13451,7 @@ window.submitStatement = async function () {
             ts: Date.now(), edited: !!prev
         };
         if (!st.evidenceFiles.length) delete st.evidenceFiles;
-        const path = `incidents/${r.id}/statements/${myId}`;
+        const path = `${STATEMENTS_NODE}/${r.id}/${myId}`;
         await database.ref(path).set(st);
         await logAction(nick || "Kierowca", "REPORT", r.id, `${prev ? "Zaktualizowano" : "Złożono"} oświadczenie strony (${role === "accused" ? "oskarżony" : "zgłaszający"})${uploaded.length ? ` z ${uploaded.length} nowymi plikami` : ""}.`, { items: [{ path, data: prev }] });
         postWebhook(NEW_REPORT_WEBHOOK, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
@@ -15263,12 +15361,12 @@ const DB_NAMES = {
     voiceSignals: "Dawne kanały głosowe — sygnalizacja (do usunięcia)", incident_counter: "Licznik numerów zgłoszeń",
     appeal_counter: "Licznik numerów apelacji", counters: "Liczniki", chat: "Czat", chats: "Czaty",
     textOverrides: "Zmienione teksty strony", appearance: "Wygląd", announcement: "Ogłoszenie",
-    presence: "Kto co robi (obecność na żywo)", incident_private: "Notatki wewnętrzne i głosy sędziów", reportWindow: "Dawna ręczna blokada zgłoszeń (nieużywane — do usunięcia)", reportSchedule: "Harmonogram otwierania zgłoszeń", season: "Sezon", calendar: "Kalendarz", suspensions: "Zawieszenia",
+    presence: "Kto co robi (obecność na żywo)", incident_private: "Notatki wewnętrzne i głosy sędziów", incident_statements: "Oświadczenia stron (tylko zespół i autor)", reportWindow: "Dawna ręczna blokada zgłoszeń (nieużywane — do usunięcia)", reportSchedule: "Harmonogram otwierania zgłoszeń", season: "Sezon", calendar: "Kalendarz", suspensions: "Zawieszenia",
     voting: "Głosowanie", bulletin: "Biuletyn", permissions: "Uprawnienia", statements: "Oświadczenia stron",
     customFields: "Rubryki formularzy / dodatkowe rubryki"
 };
 DB_NAMES[EVIDENCE_NODE] = "Pliki dowodów";
-const DB_ROOT_FALLBACK = ["incidents", "incident_private", "presence", "appeals", "stewards", "settings", "action_logs", "deleted_action_logs", "trash", "chat", "verdictTemplates", "incident_counter", "appeal_counter", "counters", EVIDENCE_NODE];
+const DB_ROOT_FALLBACK = ["incidents", "incident_private", "incident_statements", "presence", "appeals", "stewards", "settings", "action_logs", "deleted_action_logs", "trash", "chat", "verdictTemplates", "incident_counter", "appeal_counter", "counters", EVIDENCE_NODE];
 const DB_PAGE = 100;
 const DB_PREVIEW_FIELDS = ["nick", "accusedNick", "status", "decision", "track", "category", "split", "role", "steward", "title", "name", "category", "details", "text", "message", "from"];
 
