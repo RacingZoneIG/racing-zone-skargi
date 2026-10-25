@@ -5031,33 +5031,6 @@ function canOpenTrash() {
 
 let isAdminAuthenticated = false;
 let discordDriverAuth = null; // { id, username, globalName, avatarUrl } — kierowca zalogowany przez Discord
-
-// Domyślny awatar Discorda (konto bez własnego zdjęcia) — tak samo jak liczy go Discord:
-// nowe nazwy użytkownika → (id >> 22) % 6, stare konta z #1234 → discriminator % 5.
-function discordDefaultAvatar(id, discriminator) {
-    let n = 0;
-    try {
-        const disc = Number(discriminator || 0);
-        n = disc > 0 ? disc % 5 : Number((BigInt(String(id)) >> 22n) % 6n);
-    } catch (e) { n = 0; }
-    return `https://cdn.discordapp.com/embed/avatars/${n}.png`;
-}
-// Awatar z ostatniego logowania przez Discord (kierowca ALBO panel stewarda) — używa go m.in. zakładka „Na żywo”.
-function rememberDiscordAvatar(id, url) {
-    try { localStorage.setItem("discordAvatar", JSON.stringify({ id: String(id), url: String(url || "") })); } catch (e) {}
-}
-// Najlepszy znany awatar dla danego Discord ID: z logowania kierowcy, z logowania do panelu, a w ostateczności domyślny.
-function knownDiscordAvatar(id) {
-    id = String(id || "");
-    if (!/^\d{5,25}$/.test(id)) return "";
-    const real = u => /^https:\/\/cdn\.discordapp\.com\/avatars\//.test(String(u || ""));
-    if (discordDriverAuth && String(discordDriverAuth.id) === id && real(discordDriverAuth.avatarUrl)) return String(discordDriverAuth.avatarUrl);
-    try {
-        const s = JSON.parse(localStorage.getItem("discordAvatar") || "null");
-        if (s && String(s.id) === id && real(s.url)) return String(s.url);
-    } catch (e) {}
-    return discordDefaultAvatar(id);
-}
 let currentLang = 'pl';
 let currentlyEditedReportId = null;
 let isUsersAuth = false;
@@ -5924,9 +5897,7 @@ async function handleDiscordOAuthRedirect() {
                 const user = await signInWithDiscordAccessToken(accessToken);
                 const avatarUrl = user.avatar
                     ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64`
-                    : discordDefaultAvatar(user.id, user.discriminator);
-                // Zapamiętujemy awatar przy każdym logowaniu (także do panelu stewarda) — dla zakładki „Na żywo”.
-                rememberDiscordAvatar(user.id, avatarUrl);
+                    : `https://cdn.discordapp.com/embed/avatars/${Number(BigInt(user.discriminator || "0") % 5n)}.png`;
 
                 if (uidBefore !== String(user.id)) {
                     // Nowa sesja: dane strony były wczytane bez logowania (albo innym kontem) —
@@ -15197,11 +15168,11 @@ const EVIDENCE_NODE = typeof EVIDENCE_DB_NODE !== "undefined" ? EVIDENCE_DB_NODE
 const DB_NAMES = {
     incidents: "Zgłoszenia", appeals: "Apelacje", stewards: "Stewardzi", settings: "Ustawienia",
     action_logs: "Dziennik akcji", deleted_action_logs: "Archiwum usuniętych logów", trash: "Kosz",
-    verdictTemplates: "Szablony werdyktów", calls: "Dawne rozmowy głosowe (do usunięcia)", voiceMembers: "Dawne kanały głosowe + zapasowy węzeł podglądu „Na żywo” (_presence)",
+    verdictTemplates: "Szablony werdyktów", calls: "Dawne rozmowy głosowe (do usunięcia)", voiceMembers: "Dawne kanały głosowe — obecni (do usunięcia)",
     voiceSignals: "Dawne kanały głosowe — sygnalizacja (do usunięcia)", incident_counter: "Licznik numerów zgłoszeń",
     appeal_counter: "Licznik numerów apelacji", counters: "Liczniki", chat: "Czat", chats: "Czaty",
     textOverrides: "Zmienione teksty strony", appearance: "Wygląd", announcement: "Ogłoszenie",
-    presence: "Podgląd „Na żywo” — kto co robi", reportWindow: "Dawna ręczna blokada zgłoszeń (nieużywane — do usunięcia)", reportSchedule: "Harmonogram otwierania zgłoszeń", season: "Sezon", calendar: "Kalendarz", suspensions: "Zawieszenia",
+    presence: "Kto co robi (obecność na żywo)", reportWindow: "Dawna ręczna blokada zgłoszeń (nieużywane — do usunięcia)", reportSchedule: "Harmonogram otwierania zgłoszeń", season: "Sezon", calendar: "Kalendarz", suspensions: "Zawieszenia",
     voting: "Głosowanie", bulletin: "Biuletyn", permissions: "Uprawnienia", statements: "Oświadczenia stron",
     customFields: "Rubryki formularzy / dodatkowe rubryki"
 };
@@ -17427,7 +17398,7 @@ const LO_PLACES = {
     formSection: "Nowe zgłoszenie", appealSection: "Apelacja", historySection: "Historia",
     chatSection: "Czat sędziowski", trashSection: "Kosz", adminSection: "Panel administracyjny",
     statsSection: "Statystyki", usersSection: "Użytkownicy i role", decisionsSection: "Decyzje",
-    liveSection: "Na żywo"
+    presenceSection: "Kto co robi"
 };
 function loPlaceOf(el) {
     if (!el || el.nodeType !== 1) return "Strona";
@@ -18062,937 +18033,684 @@ database.ref(LO_PATH).on("value", snap => {
 
 
 <style>
-/* ============================================================
-   === ROZBUDOWA 128 — PODGLĄD NA ŻYWO: style ===
-   ============================================================ */
-#liveMenuBtn{color:var(--green-text);border-bottom:3px solid transparent;}
-#liveMenuBtn .lv-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;margin-left:6px;border-radius:9px;background:#059669;color:#fff;font-size:10px;font-weight:800;letter-spacing:0;vertical-align:middle;}
-#liveMenuBtn .lv-count:empty{display:none;}
-.lv-pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:#10b981;margin-right:7px;vertical-align:middle;animation:lvPulse 2s ease-out infinite;}
-@keyframes lvPulse{0%{box-shadow:0 0 0 0 rgba(16,185,129,.6);}70%{box-shadow:0 0 0 7px rgba(16,185,129,0);}100%{box-shadow:0 0 0 0 rgba(16,185,129,0);}}
-@media (prefers-reduced-motion:reduce){.lv-pulse,.lv-typing .lv-dots::after{animation:none;}}
-
-.lv-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
-.lv-conn{font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:4px;letter-spacing:.3px;}
-.lv-conn.warn{color:var(--amber-text);cursor:pointer;}
-.lv-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px;margin:16px 0;}
-.lv-tiles .stat-box strong{font-size:24px;}
-.lv-tiles .stat-box.hot strong{color:var(--amber-text);}
-.lv-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,330px);gap:16px;align-items:start;}
-@media (max-width:920px){.lv-layout{grid-template-columns:minmax(0,1fr);}}
-.lv-side .stats-group-box{margin-bottom:16px;}
-#lvTabs{flex-wrap:wrap;}
-#lvTabs .split-tab-btn.active,html[data-theme] #lvTabs .split-tab-btn.active{background:var(--red);border-color:var(--red);color:var(--rz-on-accent,#fff);}
-@media (max-width:560px){#lvTabs .split-tab-btn{padding:7px 10px;font-size:11px;letter-spacing:.5px;}.lv-person{padding:10px;gap:10px;}.lv-since{margin-left:0;}}
-.lv-empty{color:var(--text-dim);font-size:12px;padding:18px 8px;text-align:center;line-height:1.5;}
-
-.lv-person{display:flex;gap:12px;align-items:flex-start;padding:11px 14px;margin-bottom:8px;background:var(--bg-deep);border:1px solid var(--border);border-left:3px solid var(--lv-k,#64748b);border-radius:4px;}
-.lv-person.k-steward{--lv-k:var(--red);}
-.lv-person.k-judge{--lv-k:#a855f7;}
-.lv-person.k-driver{--lv-k:#3b82f6;}
-.lv-person.k-guest{--lv-k:#64748b;}
-.lv-person.st-idle,.lv-person.st-hidden{opacity:.6;}
-.lv-person.me{background:linear-gradient(90deg,rgba(16,185,129,.07),transparent 40%),var(--bg-deep);}
-.lv-av{position:relative;flex:none;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-family:var(--font-heading);font-weight:800;font-size:17px;}
-.lv-av img{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover;}
-.lv-av i{position:absolute;right:-2px;bottom:-2px;width:12px;height:12px;border-radius:50%;border:2px solid var(--bg-deep);background:#10b981;}
-.lv-av i.st-idle{background:#f59e0b;}
-.lv-av i.st-hidden{background:#6b7280;}
-.lv-main{flex:1;min-width:0;}
-.lv-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-.lv-name{font-weight:700;font-size:14px;color:var(--text);overflow-wrap:anywhere;}
-.lv-name em{font-style:normal;font-weight:600;color:var(--green-text);font-size:11px;margin-left:4px;}
-.lv-kind{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:2px 6px;border-radius:3px;border:1px solid var(--border);color:var(--text-dim);white-space:nowrap;}
-.lv-kind.k-steward{color:var(--red-text);border-color:rgba(225,6,0,.4);background:rgba(225,6,0,.08);}
-.lv-kind.k-judge{color:var(--purple-text);border-color:rgba(168,85,247,.45);background:rgba(168,85,247,.08);}
-.lv-kind.k-driver{color:#60a5fa;border-color:rgba(59,130,246,.45);background:rgba(59,130,246,.08);}
-html[data-theme="light"] .lv-kind.k-driver,html[data-theme="graphite"] .lv-kind.k-driver{color:#1d4ed8;}
-.lv-since{margin-left:auto;font-size:11px;color:var(--text-dim);white-space:nowrap;font-variant-numeric:tabular-nums;}
-.lv-act{margin-top:4px;font-size:13px;line-height:1.5;color:var(--text);}
-.lv-ico{display:inline-block;width:20px;}
-.lv-dim{color:var(--text-dim);}
-.lv-meta{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--text-dim);}
-.lv-meta .lv-warn{color:var(--amber-text);}
-.lv-typing{display:inline-block;margin-left:8px;font-size:11px;font-weight:700;color:var(--green-text);white-space:nowrap;}
-.lv-typing .lv-dots::after{content:"…";display:inline-block;animation:lvDots 1.2s steps(4,end) infinite;overflow:hidden;vertical-align:bottom;width:0;}
-@keyframes lvDots{to{width:1.1em;}}
-
-button.lv-case,span.lv-case{all:unset;display:inline-block;margin:0 0 0 4px;padding:0 6px;border-radius:3px;border:1px solid var(--border);font-size:11px;font-weight:700;line-height:18px;color:var(--text);background:rgba(255,255,255,.04);white-space:nowrap;vertical-align:baseline;font-family:var(--font-body);}
-button.lv-case{cursor:pointer;}
-button.lv-case::before{content:none;display:none;}
-button.lv-case:hover,button.lv-case:focus-visible{border-color:var(--gold);color:var(--gold);}
-html[data-theme="light"] button.lv-case:hover,html[data-theme="graphite"] button.lv-case:hover{color:#92400e;border-color:#b45309;}
-
-.lv-cg{padding:9px 0;border-top:1px dashed var(--border);font-size:12px;}
-.lv-cg:first-child{border-top:none;padding-top:0;}
-.lv-cg-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
-.lv-cg-head .lv-case{margin-left:0;}
-.lv-cg-sub{font-size:11px;color:var(--text-dim);margin:2px 0 4px;overflow-wrap:anywhere;}
-.lv-cg-who{display:flex;flex-direction:column;gap:2px;color:var(--text);}
-.lv-cg-who span b{font-weight:700;}
-.lv-conflict{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;color:#000;background:#fbbf24;}
-
-.lv-fi{display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px dashed var(--border);font-size:11px;line-height:1.45;color:var(--text);}
-.lv-fi:last-child{border-bottom:none;}
-.lv-ft{color:var(--text-dim);font-variant-numeric:tabular-nums;flex:none;min-width:36px;}
-.lv-fi .lv-case{font-size:10px;line-height:16px;}
-
-.lv-diag{margin-top:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-deep);font-size:12px;color:var(--text-dim);}
-.lv-diag>summary{cursor:pointer;padding:10px 14px;font-weight:700;letter-spacing:.5px;color:var(--text-dim);}
-.lv-diag>div{padding:0 14px 14px;line-height:1.6;}
-.lv-diag .lv-ok{color:var(--green-text);}
-.lv-diag .lv-bad{color:var(--red-text);}
-.lv-diag .lv-mid{color:var(--amber-text);}
-.lv-diag pre{white-space:pre-wrap;word-break:break-word;background:var(--bg-input);border:1px solid var(--border);border-radius:3px;padding:10px 12px;font-size:11px;color:var(--text);margin:8px 0;}
-
-.lv-rowchips .lv-chip{font-weight:700;cursor:default;}
-.lv-chip.k-steward,.lv-chip.k-judge{color:var(--green-text);border-color:rgba(16,185,129,.5);}
-.lv-chip.k-steward.work,.lv-chip.k-judge.work{color:#000;background:#fbbf24;border-color:#fbbf24;}
-.lv-chip.k-driver{color:#60a5fa;border-color:rgba(59,130,246,.5);}
-html[data-theme="light"] .lv-chip.k-driver,html[data-theme="graphite"] .lv-chip.k-driver{color:#1d4ed8;}
-#lvVerdictWarn{display:none;margin-bottom:12px;padding:9px 12px;border-radius:4px;font-size:12px;line-height:1.5;}
-#lvVerdictWarn.work{border:1px solid rgba(251,191,36,.5);background:rgba(251,191,36,.1);color:var(--amber-text);}
-#lvVerdictWarn.view{border:1px solid rgba(16,185,129,.4);background:rgba(16,185,129,.07);color:var(--green-text);}
-#lvDescViewers{display:none;margin:-6px 0 10px;font-size:11px;line-height:1.5;color:var(--green-text);}
-#lvDescViewers.work{color:var(--amber-text);}
+/* === ROZBUDOWA 132 — KTO CO ROBI (podgląd na żywo) === */
+#presenceMenuBtn .pv-badge { display: inline-block; min-width: 16px; margin-left: 6px; padding: 0 5px; border-radius: 8px; background: var(--green-text); color: #fff; font-size: 10px; line-height: 16px; text-align: center; letter-spacing: 0; }
+#presenceSection .pv-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+#presenceSection .pv-live { font-size: 11px; letter-spacing: 1px; color: var(--green-text); white-space: nowrap; }
+#presenceSection .pv-live.off { color: var(--text-dim); }
+#presenceSection .pv-tab-count { margin-left: 4px; opacity: .75; }
+html[data-theme="light"] #pvTabs .split-tab-btn.active, html[data-theme="graphite"] #pvTabs .split-tab-btn.active { background: var(--red); }
+#presenceSection .pv-summary { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 12px; }
+#presenceSection .pv-pill { font-size: 11px; padding: 3px 10px; border: 1px solid var(--border); border-radius: 12px; color: var(--text-dim); background: var(--bg-deep); }
+#presenceSection .pv-pill b { color: var(--text); font-weight: 700; }
+#presenceSection .pv-h { font-family: var(--font-heading); font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-dim); margin: 18px 0 8px; }
+#presenceSection .pv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(290px, 100%), 1fr)); gap: 10px; }
+#presenceSection .pv-card { min-width: 0; background: var(--bg-deep); border: 1px solid var(--border); border-left: 3px solid var(--text-muted); border-radius: 4px; padding: 10px 12px; font-size: 12px; line-height: 1.5; }
+#presenceSection .pv-card.st-active { border-left-color: var(--green-text); }
+#presenceSection .pv-card.st-idle { border-left-color: var(--amber-text); }
+#presenceSection .pv-card.st-away { border-left-color: var(--text-dim); }
+#presenceSection .pv-card.st-off { opacity: .6; }
+#presenceSection .pv-card.pv-clash { box-shadow: inset 0 0 0 1px rgba(251,191,36,.45); }
+#presenceSection .pv-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+#presenceSection .pv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex: 0 0 auto; }
+#presenceSection .st-active .pv-dot { background: var(--green-text); box-shadow: 0 0 6px var(--green-text); }
+#presenceSection .st-idle .pv-dot { background: var(--amber-text); }
+#presenceSection .st-away .pv-dot { background: var(--text-dim); }
+#presenceSection .pv-nick { font-weight: 700; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+#presenceSection .pv-role { font-size: 10px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; white-space: nowrap; }
+#presenceSection .pv-role.unverified { color: var(--amber-text); border-color: rgba(251,191,36,.45); }
+#presenceSection .pv-you { font-size: 10px; color: var(--gold); letter-spacing: 1px; }
+#presenceSection .pv-act { margin-top: 6px; color: var(--text); overflow-wrap: anywhere; }
+#presenceSection .pv-ico { margin-right: 4px; }
+#presenceSection button.pv-case { display: inline; position: static; overflow: visible; clip-path: none; transform: none; filter: none; box-shadow: none; background: none; border: 0; border-radius: 0; padding: 0; margin: 0; font: inherit; font-weight: 600; letter-spacing: normal; text-transform: none; white-space: nowrap; color: var(--gold); cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; transition: none; }
+#presenceSection button.pv-case::before { content: none; }
+#presenceSection button.pv-case:hover { transform: none; filter: none; box-shadow: none; text-decoration-style: solid; }
+#presenceSection button.pv-case:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+#presenceSection .pv-typing { margin-left: 6px; font-size: 11px; color: var(--green-text); white-space: nowrap; }
+#presenceSection .pv-meta { margin-top: 3px; font-size: 11px; color: var(--text-dim); overflow-wrap: anywhere; }
+#presenceSection .pv-meta .warn { color: var(--amber-text); }
+#presenceSection .pv-last { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); font-size: 11px; color: var(--text-dim); overflow-wrap: anywhere; }
+#presenceSection .pv-list { display: flex; flex-direction: column; gap: 6px; }
+#presenceSection .pv-row { display: flex; align-items: baseline; gap: 6px 10px; flex-wrap: wrap; background: var(--bg-deep); border: 1px solid var(--border); border-left: 3px solid var(--text-muted); border-radius: 4px; padding: 7px 10px; font-size: 12px; line-height: 1.5; }
+#presenceSection .pv-row.st-active { border-left-color: var(--green-text); }
+#presenceSection .pv-row.st-idle { border-left-color: var(--amber-text); }
+#presenceSection .pv-row.st-away { border-left-color: var(--text-dim); }
+#presenceSection .pv-row .pv-act { margin: 0; flex: 1 1 220px; }
+#presenceSection .pv-row .pv-meta { margin: 0; }
+#presenceSection .pv-warn { margin-bottom: 10px; padding: 8px 12px; border: 1px solid rgba(251,191,36,.45); border-radius: 4px; background: rgba(251,191,36,.08); color: var(--amber-text); font-size: 12px; line-height: 1.55; }
+#presenceSection .pv-warn b { color: inherit; }
+#presenceSection .pv-empty { padding: 14px; border: 1px dashed var(--border); border-radius: 4px; color: var(--text-dim); font-size: 12px; text-align: center; }
+#presenceSection .pv-rules { margin-bottom: 14px; padding: 12px 14px; border: 1px solid rgba(239,68,68,.45); border-radius: 4px; background: rgba(239,68,68,.06); font-size: 12px; line-height: 1.6; color: var(--text); }
+#presenceSection .pv-rules h3 { margin: 0 0 6px; font-size: 13px; color: var(--red-text); }
+#presenceSection .pv-rules pre { margin: 8px 0; padding: 10px 12px; overflow-x: auto; background: var(--bg-input); border: 1px solid var(--border); border-radius: 3px; font-size: 11px; line-height: 1.5; color: var(--text); white-space: pre; }
+#presenceSection .pv-rules button { padding: 5px 12px; font-size: 11px; }
+#presenceSection .pv-foot { margin-top: 16px; font-size: 11px; color: var(--text-dim); line-height: 1.5; }
 </style>
 
 <script>
 /* ============================================================
-   === ROZBUDOWA 128 — PODGLĄD NA ŻYWO: kto co robi w danym momencie ===
-   1. Każda otwarta karta strony (steward, sędzia gościnny, kierowca, gość) na bieżąco
-      zgłasza, kim jest i co robi: zakładka, sprawa, otwarte okno, „pisze…”,
-      bezczynność / karta w tle, kanał głosowy, rozmowa, telefon / komputer.
-      Zapisywane są wyłącznie te flagi i identyfikatory — nigdy treść wpisywana w pola,
-      a pola haseł i wyszukiwarki w ogóle nie są brane pod uwagę.
-   2. Zakładka „🟢 Na żywo” (tylko Główny Steward / ROOT): osoby online z aktualną
-      czynnością i czasem jej trwania, „Przy sprawach” (kto nad czym siedzi + ostrzeżenie,
-      gdy dwóch stewardów pracuje nad tą samą sprawą), ostatnie zmiany, goście.
-   3. Koordynacja w panelu (też tylko dla Głównego Stewarda / ROOT): znaczniki przy
-      zgłoszeniach otwartych teraz przez innych, ostrzeżenie w panelu werdyktu oraz
-      informacja w oknie sprawy, kto ją jeszcze ogląda.
-   Dane: presence/{id karty}. Wpis znika sam po zamknięciu karty (onDisconnect).
-   Gdy reguły Firebase nie pozwalają pisać w presence, moduł sam przechodzi na
-   voiceMembers/_presence (węzeł już zapisywalny dla kierowców i stewardów; moduł
-   kanałów głosowych go pomija), więc działa bez zmian w regułach. Zalecaną regułę
-   dla presence pokazuje zakładka „Na żywo” → Diagnostyka.
+   === ROZBUDOWA 132 — KTO CO ROBI (podgląd na żywo) ===
+   Każda otwarta karta zalogowanej osoby (steward, sędzia spoza ligi, kierowca) zapisuje
+   w presence/<uid>/sessions/<karta>, co ta osoba teraz robi: którą zakładkę ma otwartą,
+   którą sprawę rozpatruje / przegląda / edytuje, czy pisze werdykt, głosuje, pisze na czacie
+   albo wypełnia formularz, czy jest bezczynna lub ma kartę w tle. Po zamknięciu karty wpis
+   znika sam (onDisconnect), a w presence/<uid>/lastSeen zostaje czas ostatniej wizyty.
+   Zakładka „👀 Kto co robi” (Główny Steward / ROOT, w tym właściciele ligi, i uprawnienie USR)
+   pokazuje to na żywo: zespół (także offline, z ostatnią wizytą i ostatnią akcją z Dziennika),
+   kierowców online i ostrzeżenie, gdy kilku sędziów pracuje nad tą samą sprawą.
+   Wymaga reguły dla węzła „presence” w regułach bazy — bez niej panel pokazuje, co dopisać.
    ============================================================ */
 (function () {
 "use strict";
-if (typeof database === "undefined" || typeof firebase === "undefined" || !firebase.database) {
-    console.error("[128] Brak Firebase — podgląd na żywo nieaktywny."); return;
-}
+
+const PV_PATH = "presence";
+const HEARTBEAT_MS = 60000;      // co tyle karta potwierdza, że wciąż jest otwarta
+const STALE_MS = 210000;         // wpis karty starszy niż to = karta nie żyje (np. uśpiony laptop)
+const IDLE_MS = 4 * 60000;       // brak ruchu myszy / klawiatury przez tyle = „bezczynny”
+const TYPING_MS = 25000;         // „pisze…” przez tyle od ostatniego wpisanego znaku
+const CLEANUP_MS = 10 * 60000;   // własne martwe wpisy kart starsze niż to są usuwane przy starcie
 
 const $ = id => document.getElementById(id);
-const L = (pl, en) => (typeof currentLang !== "undefined" && currentLang === "en") ? en : pl;
-const esc = s => (typeof escapeHtml === "function") ? escapeHtml(s) : String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const g = f => { try { return f(); } catch (e) { return undefined; } };
-const clip = (s, n) => String(s == null ? "" : s).slice(0, n);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const short = (s, n) => { s = String(s == null ? "" : s).replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
+const pad = n => String(n).padStart(2, "0");
 const TS = firebase.database.ServerValue.TIMESTAMP;
-
-const NODES = ["presence", "voiceMembers/_presence"];
-const STALE_MS = 10 * 60 * 1000;   // brak sygnału dłużej niż 10 min → wpis pomijany (np. uśpiony laptop)
-const IDLE_MS = 3 * 60 * 1000;     // 3 min bez myszy / klawiatury → „bezczynny”
-const TYPING_MS = 6000;            // „pisze…” jeszcze 6 s po ostatnim znaku
-const HEARTBEAT_MS = 60 * 1000;    // odświeżenie znacznika „ostatni sygnał”
-const MIN_WRITE_GAP = 700;         // nie częściej niż ~1,5 zapisu na sekundę
-const AVATAR_RE = /^https:\/\/cdn\.discordapp\.com\//;
-
-const SID = (() => {
-    const a = new Uint8Array(12); (window.crypto || window.msCrypto).getRandomValues(a);
-    return Array.prototype.map.call(a, b => (b % 36).toString(36)).join("");
-})();
-const DEV = ((navigator.userAgentData && navigator.userAgentData.mobile) || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "")) ? "mobile" : "desktop";
+// Nowy klucz karty przy każdym połączeniu — spóźnione onDisconnect starego połączenia
+// nie skasuje wtedy świeżego wpisu.
+const newSid = () => (window.crypto && crypto.getRandomValues)
+    ? Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, "0")).join("")
+    : Math.random().toString(36).slice(2, 14);
+let SID = newSid();
+const IS_MOBILE = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
 
 let serverOffset = 0;
 database.ref(".info/serverTimeOffset").on("value", s => { serverOffset = Number(s.val()) || 0; });
-const sNow = () => Date.now() + serverOffset;
+const now = () => Date.now() + serverOffset;
 
-/* ---------- słowniki ---------- */
-const ACT = {
-    form:                ["🏠", "Strona zgłoszeń", "Report page"],
-    report:              ["✍️", "Wypełnia zgłoszenie", "Filling in a report"],
-    report_preview:      ["👁", "Sprawdza zgłoszenie przed wysłaniem", "Reviewing a report before sending"],
-    appeal_form:         ["⚖️", "Formularz apelacji", "Appeal form"],
-    appeal:              ["⚖️", "Pisze apelację", "Writing an appeal"],
-    history:             ["📂", "Przegląda historię swoich spraw", "Browsing own case history"],
-    pchat:               ["💬", "Czat ze stewardami", "Chatting with stewards"],
-    statement:           ["📝", "Pisze oświadczenie", "Writing a statement"],
-    decisions:           ["📋", "Tablica decyzji", "Decisions board"],
-    login:               ["🔑", "Loguje się do panelu", "Logging in to the panel"],
-    admin:               ["🗂", "Lista zgłoszeń w panelu", "Reports list"],
-    verdict:             ["⚖️", "Przygotowuje werdykt", "Preparing a verdict"],
-    appeal_verdict:      ["⚖️", "Rozpatruje apelację", "Deciding an appeal"],
-    case_view:           ["🔍", "Przegląda sprawę", "Viewing a case"],
-    case_edit:           ["✏️", "Edytuje zgłoszenie", "Editing a report"],
-    notes:               ["🗒", "Pisze notatki do sprawy", "Writing case notes"],
-    appeal_edit:         ["✏️", "Edytuje apelację", "Editing an appeal"],
-    appeal_verdict_edit: ["✏️", "Edytuje werdykt apelacji", "Editing an appeal verdict"],
-    schat:               ["💬", "Czat sędziowski", "Steward chat"],
-    stats:               ["📈", "Statystyki", "Statistics"],
-    users:               ["👥", "Użytkownicy i role", "Users & roles"],
-    logs:                ["📜", "Dziennik akcji", "Action log"],
-    trash:               ["🗑", "Kosz", "Trash"],
-    bulletin:            ["📰", "Biuletyn rundy", "Round bulletin"],
-    search:              ["🔎", "Szuka sprawy", "Searching cases"],
-    live:                ["🟢", "Podgląd na żywo", "Live view"],
-    other:               ["🌐", "Na stronie", "On the site"]
-};
-// czynności, przy których dwóch stewardów naraz to potencjalna kolizja
-const WORK = new Set(["verdict", "appeal_verdict", "case_edit", "notes", "appeal_edit", "appeal_verdict_edit"]);
-const KIND = { steward: ["Steward", "Steward"], judge: ["Sędzia gościnny", "Guest judge"], driver: ["Kierowca", "Driver"], guest: ["Gość", "Guest"] };
-const KIND_ORDER = { steward: 0, judge: 1, driver: 2, guest: 3 };
-const STATE_ORDER = { active: 0, idle: 1, hidden: 2 };
-const actLabel = a => { const d = ACT[a] || ACT.other; return L(d[1], d[2]); };
-const actIcon = a => (ACT[a] || ACT.other)[0];
-const kindLabel = k => { const d = KIND[k] || KIND.guest; return L(d[0], d[1]); };
-
-/* ============================================================
-   1. KIM JESTEM I CO ROBIĘ (ta karta)
-   ============================================================ */
-// Awatar z Discorda dla danego ID (zdjęcie z logowania albo domyślny awatar Discorda).
-function avatarFor(id) {
-    const u = String(g(() => knownDiscordAvatar(id)) || "");
-    return AVATAR_RE.test(u) ? u.slice(0, 200) : "";
-}
-function identity() {
-    const st = g(() => (isAdminAuthenticated && loggedInSteward) ? loggedInSteward : null);
-    if (st) {
-        const ext = st.id === "external-judge";
-        return { kind: ext ? "judge" : "steward", role: "steward", name: clip(st.nick || "Steward", 60),
-                 discordId: ext ? "" : clip(st.id, 30), rank: clip(st.role, 40), avatar: ext ? "" : avatarFor(st.id) };
-    }
-    const d = g(() => discordDriverAuth);
-    if (d && d.id) {
-        return { kind: "driver", role: "player", name: clip(d.globalName || d.username || "Kierowca", 60),
-                 discordId: clip(d.id, 30), rank: "", avatar: avatarFor(d.id) };
-    }
-    return { kind: "guest", role: "player", name: "Gość", discordId: "", rank: "", avatar: "" };
-}
-// Podgląd (zakładka, znaczniki w panelu, ostrzeżenia) widzi WYŁĄCZNIE Główny Steward (oraz ROOT).
-// Pozostali stewardzi, sędziowie gościnni i kierowcy tylko zgłaszają swoją obecność — niczego nie widzą.
-const LEAD_ROLES = ["Główny Steward", "ROOT"];
-const canView = () => { const me = identity(); return me.kind === "steward" && LEAD_ROLES.includes(me.rank); };
-
-function shown(id) {
-    const el = $(id);
-    if (!el) return false;
-    try { return getComputedStyle(el).display !== "none"; } catch (e) { return false; }
-}
-const val = id => { const el = $(id); return el ? String(el.value || "").trim() : ""; };
-const optText = id => { const el = $(id); return el && el.selectedIndex >= 0 && el.options[el.selectedIndex] ? String(el.options[el.selectedIndex].text || "").trim() : ""; };
-function activeSection() { const s = document.querySelector(".card .section.active") || document.querySelector(".section.active"); return s ? s.id : ""; }
-function verdictTarget() {
-    const v = val("caseId");
-    if (!v) return null;
-    const m = v.match(/^(.*?)\s*\(([^()]+)\)\s*$/);
-    return m ? { c: m[1].trim(), a: m[2].trim() } : { c: v, a: "" };
-}
-function trackSplit() { return [optText("track"), val("split")].filter(Boolean).join(" · "); }
-function formDraft() { return ["details", "accusedNick", "accusedDiscordId", "evidence"].some(id => val(id)); }
-
-function detect() {
-    const me = identity(), sec = activeSection();
-    let a = "other", c = "", x = "";
-    if (shown("adminLoginModal") || shown("externalJudgeModal")) a = "login";
-    else if (shown("descModal")) {
-        c = g(() => currentlyEditedReportId) || "";
-        const notes = $("modalNotesField");
-        a = g(() => isEditModeActive) ? "case_edit"
-          : (notes && document.activeElement === notes && !notes.readOnly) ? "notes" : "case_view";
-    }
-    else if (shown("appealEditModal")) { a = "appeal_edit"; c = g(() => currentlyEditedAppealId) || ""; }
-    else if (shown("appealVerdictEditModal")) { a = "appeal_verdict_edit"; c = g(() => currentlyEditedAppealVerdictCaseId) || ""; }
-    else if (shown("statementModal")) { a = "statement"; c = ((($("statementTitle") || {}).textContent || "").split("—")[1] || "").trim(); }
-    else if (shown("reportPreviewModal")) { a = "report_preview"; x = trackSplit(); }
-    else if (shown("bulletinModal")) a = "bulletin";
-    else if (shown("logVerdictPreviewModal")) a = "logs";
-    else if (shown("quickSearchOverlay")) a = "search";
-    else switch (sec) {
-        case "formSection":
-            if (me.kind === "driver" && formDraft()) { a = "report"; x = trackSplit(); }
-            else { a = "form"; if (shown("siteReportWindowLock")) x = "closed"; }
-            break;
-        case "appealSection":    c = val("appealCaseId"); a = c ? "appeal" : "appeal_form"; break;
-        case "historySection":   c = g(() => selectedPlayerCaseId) || ""; a = c ? "pchat" : "history"; break;
-        case "decisionsSection": a = "decisions"; break;
-        case "chatSection":      c = val("chatCaseSelect"); a = "schat"; break;
-        case "adminSection": {
-            const v = verdictTarget();
-            if (v) { c = v.c; x = v.a; a = v.a ? "appeal_verdict" : "verdict"; } else a = "admin";
-            break;
-        }
-        case "statsSection": a = "stats"; break;
-        case "usersSection": a = "users"; break;
-        case "trashSection": a = "trash"; break;
-        case "liveSection":  a = "live"; break;
-    }
-    return { a, c: clip(c, 60), x: clip(x, 80), sec: clip(sec, 40) };
-}
-
-function extras() {
-    let voice = "", call = "";
-    const vs = $("vvStatus");
-    if (vs && vs.style.display === "flex") voice = clip((($("vvStatusTitle") || {}).textContent || "").trim(), 60);
-    const vb = $("vcActiveBar");
-    if (vb && vb.classList.contains("show")) call = clip(g(() => vcCurrentCaseId) || "?", 60);
-    return { voice, call };
-}
-
-/* --- pisanie i bezczynność (bez zapisywania treści) --- */
-let lastType = 0, lastInput = Date.now();
-function countsAsTyping(t) {
-    if (!t || !t.tagName) return false;
-    if (t.closest && t.closest("#liveSection")) return false;
-    if (t.classList && t.classList.contains("search-input")) return false;
-    if (/search|qsInput/i.test(t.id || "")) return false;
-    if (t.tagName === "TEXTAREA") return true;
-    return t.tagName === "INPUT" && /^(text|url|email|number|tel|)$/i.test(t.getAttribute("type") || "");
-}
-document.addEventListener("input", e => { if (countsAsTyping(e.target)) { const was = Date.now() - lastType < TYPING_MS; lastType = Date.now(); if (!was) kick(); } }, true);
-function onUserActivity() { const n = Date.now(), wasIdle = n - lastInput > IDLE_MS; lastInput = n; if (wasIdle) kick(); }
-["mousemove", "mousedown", "keydown", "touchstart", "wheel", "scroll"].forEach(ev => document.addEventListener(ev, onUserActivity, { passive: true, capture: true }));
-document.addEventListener("visibilitychange", () => { if (!document.hidden) lastInput = Date.now(); kick(); });
-document.addEventListener("change", () => kick(), true);
-document.addEventListener("click", () => kick(), true);
-
-/* ============================================================
-   2. ZAPIS OBECNOŚCI DO FIREBASE (z automatycznym węzłem zapasowym)
-   ============================================================ */
-const W = { node: null, mode: "init", err: "", lastSig: "", lastWrite: 0, busy: false, pending: false,
-            timer: null, needFull: true, needDisc: true, since: 0, sinceKey: "", joinedAt: 0, deniedAt: 0 };
-const isDenied = e => /permission/i.test(String((e && e.code) || "") + " " + String((e && e.message) || e || ""));
-const errMsg = e => clip((e && (e.code || e.message)) || String(e || ""), 160);
-
-function buildPayload() {
-    const me = identity(), d = detect(), ex = extras(), n = Date.now();
-    const key = d.a + "|" + d.c + "|" + d.x;
-    if (key !== W.sinceKey) { W.sinceKey = key; W.since = sNow(); }
-    if (!W.joinedAt) W.joinedAt = sNow();
-    return {
-        v: 1, kind: me.kind, role: me.role, name: me.name, discordId: me.discordId, rank: me.rank, avatar: me.avatar,
-        act: d.a, c: d.c, x: d.x, sec: d.sec,
-        typing: n - lastType < TYPING_MS,
-        state: document.hidden ? "hidden" : (n - lastInput > IDLE_MS ? "idle" : "active"),
-        voice: ex.voice, call: ex.call, dev: DEV, since: W.since, joinedAt: W.joinedAt
-    };
-}
-const sigOf = p => JSON.stringify([p.kind, p.name, p.discordId, p.rank, p.avatar, p.act, p.c, p.x, p.typing, p.state, p.voice, p.call]);
-
-async function setWithFallback(payload) {
-    const order = (W.node && !W.retryPrimary) ? [W.node].concat(NODES.filter(n => n !== W.node)) : NODES.slice();
-    W.retryPrimary = false;
-    let lastErr = null;
-    for (const node of order) {
-        const ref = database.ref(node + "/" + SID);
-        try {
-            await ref.set(payload);
-            if (W.node !== node || W.needDisc) {
-                W.needDisc = false;
-                ref.onDisconnect().remove().catch(e => console.warn("[128] onDisconnect:", errMsg(e)));
-            }
-            if (W.node && W.node !== node) database.ref(W.node + "/" + SID).remove().catch(() => {});
-            if (W.node !== node) console.log("[128] Obecność zapisywana w: " + node);
-            W.node = node; W.mode = node === NODES[0] ? "ok" : "fallback"; W.err = lastErr ? errMsg(lastErr) : "";
-            return true;
-        } catch (e) {
-            lastErr = e;
-            if (!isDenied(e)) { W.err = errMsg(e); return false; }
-        }
-    }
-    W.node = null; W.mode = "denied"; W.err = errMsg(lastErr); W.deniedAt = Date.now();
-    console.warn("[128] Zapis obecności odrzucony przez reguły Firebase (" + W.err + "). Szczegóły: zakładka „Na żywo” → Diagnostyka.");
-    return false;
-}
-
-async function writeNow() {
-    if (W.busy) { W.pending = true; return; }
-    const gap = Date.now() - W.lastWrite;
-    if (gap < MIN_WRITE_GAP) { clearTimeout(W.timer); W.timer = setTimeout(tick, MIN_WRITE_GAP - gap + 10); return; }
-    const p = buildPayload(), sig = sigOf(p);
-    W.busy = true; W.lastWrite = Date.now();
-    try {
-        if (await setWithFallback(Object.assign({}, p, { seen: TS }))) { W.lastSig = sig; W.needFull = false; }
-    } catch (e) { W.err = errMsg(e); }
-    finally {
-        W.busy = false;
-        if (W.pending) { W.pending = false; setTimeout(tick, MIN_WRITE_GAP); }
-        renderDiag();
-    }
-}
-
-let started = false;
-function tick() {
-    if (!started) return;
-    const p = buildPayload(), sig = sigOf(p), n = Date.now();
-    const denied = W.mode === "denied" && n - W.deniedAt < 5 * HEARTBEAT_MS;
-    // Bez zalogowania w Firebase (ekran logowania) baza i tak nie przyjmie zapisu — nie próbujemy.
-    const signedIn = typeof currentUid !== "function" || !!currentUid();
-    if (signedIn && !denied && (W.needFull || sig !== W.lastSig || n - W.lastWrite > HEARTBEAT_MS)) writeNow();
-    listen(canView());
-    localViews();
-}
-let kickT = null;
-function kick() { clearTimeout(kickT); kickT = setTimeout(tick, 120); }
-
-// po zerwaniu i odnowieniu połączenia Firebase usuwa wpis (onDisconnect) — odtwarzamy go
-database.ref(".info/connected").on("value", s => {
-    if (s.val() === true) { W.needFull = true; W.needDisc = true; W.lastWrite = 0; kick(); }
-});
-// steward zalogował się do zapisu w bazie (wariant B) — ponów próbę zapisu w presence
-g(() => { const au = (typeof fbAuth !== "undefined" && fbAuth) || null; if (au) au.onAuthStateChanged(() => { if (W.mode !== "ok") { W.retryPrimary = true; W.deniedAt = 0; W.needFull = true; W.lastWrite = 0; kick(); } }); });
-window.addEventListener("pagehide", () => { if (W.node) { try { database.ref(W.node + "/" + SID).remove(); } catch (e) {} } });
-
-/* ============================================================
-   3. ODCZYT (tylko Główny Steward / ROOT)
-   ============================================================ */
-const R = { on: false, data: [{}, {}], err: ["", ""], loaded: [false, false], offs: [], prev: null, feed: [], filter: "all", lastData: 0 };
-
-function listen(on) {
-    if (on === R.on) return;
-    R.on = on;
-    if (on) {
-        NODES.forEach((node, i) => {
-            const ref = database.ref(node);
-            const h = ref.on("value",
-                s => { R.data[i] = s.val() || {}; R.err[i] = ""; R.loaded[i] = true; onData(); },
-                e => { R.data[i] = {}; R.err[i] = errMsg(e); R.loaded[i] = true; onData(); });
-            R.offs.push(() => ref.off("value", h));
-        });
-    } else {
-        R.offs.forEach(f => { try { f(); } catch (e) {} });
-        R.offs = []; R.data = [{}, {}]; R.err = ["", ""]; R.loaded = [false, false]; R.prev = null; R.feed = [];
-        localViews();
-    }
-    updateMenu();
-}
-
-function norm(sid, p, node) {
-    const av = String(p.avatar || "");
-    return {
-        sid, node, self: sid === SID,
-        kind: KIND[p.kind] ? p.kind : "guest",
-        name: clip(p.name, 60) || "?", discordId: clip(p.discordId, 30), rank: clip(p.rank, 40),
-        avatar: AVATAR_RE.test(av) ? av.slice(0, 200) : "",
-        act: ACT[p.act] ? p.act : "other", c: clip(p.c, 60), x: clip(p.x, 80),
-        typing: p.typing === true, state: STATE_ORDER[p.state] != null ? p.state : "active",
-        voice: clip(p.voice, 60), call: clip(p.call, 60), dev: p.dev === "mobile" ? "mobile" : "desktop",
-        since: Number(p.since) || 0, joinedAt: Number(p.joinedAt) || 0, seen: Number(p.seen) || 0
-    };
-}
-function sessions() {
-    const n = sNow(), bySid = new Map();
-    R.data.forEach((obj, i) => {
-        if (!obj || typeof obj !== "object") return;
-        Object.keys(obj).forEach(sid => {
-            const p = obj[sid];
-            if (!p || typeof p !== "object" || !p.kind || !p.act) return;
-            if (p.seen && n - Number(p.seen) > STALE_MS) return;
-            const s = norm(sid, p, i), prev = bySid.get(sid);
-            if (!prev || s.seen > prev.seen) bySid.set(sid, s);
-        });
-    });
-    return [...bySid.values()];
-}
-const pkey = s => s.kind === "guest" ? "g:" + s.sid : (s.discordId ? "id:" + s.discordId : s.kind + ":" + s.name.toLowerCase());
-const myKey = () => { const me = identity(); return me.kind === "guest" ? "g:" + SID : (me.discordId ? "id:" + me.discordId : me.kind + ":" + me.name.toLowerCase()); };
-const rankSession = (a, b) => (STATE_ORDER[a.state] - STATE_ORDER[b.state]) || ((WORK.has(b.act) ? 1 : 0) - (WORK.has(a.act) ? 1 : 0)) || (b.since - a.since);
-
-/* --- awatary: prawdziwe zdjęcie z dowolnej karty tej osoby → zapamiętane wcześniej → domyślny awatar Discorda --- */
-const REAL_AV_RE = /^https:\/\/cdn\.discordapp\.com\/avatars\//;
-const AV_CACHE_KEY = "lvAvatarCache", AV_CACHE_MAX = 300;
-const avCache = (() => {
-    const m = new Map();
-    try { const o = JSON.parse(localStorage.getItem(AV_CACHE_KEY) || "{}"); Object.keys(o).forEach(k => { if (/^\d{5,25}$/.test(k) && REAL_AV_RE.test(String(o[k]))) m.set(k, String(o[k]).slice(0, 200)); }); } catch (e) {}
-    return m;
-})();
-function rememberAvatar(id, url) {
-    if (!id || !REAL_AV_RE.test(url) || avCache.get(id) === url) return;
-    avCache.delete(id); avCache.set(id, url);
-    while (avCache.size > AV_CACHE_MAX) avCache.delete(avCache.keys().next().value);
-    try { localStorage.setItem(AV_CACHE_KEY, JSON.stringify(Object.fromEntries(avCache))); } catch (e) {}
-}
-function defaultAvatar(id) {
-    if (!/^\d{5,25}$/.test(String(id || ""))) return "";
-    const u = String(g(() => discordDefaultAvatar(id)) || "");
-    return AVATAR_RE.test(u) ? u : "";
-}
-// adresy, które się nie wczytały (zbiera je onerror w personHtml) — nie próbujemy ich przy każdym odświeżeniu
-const badAv = u => !!(window.lvBadAv && window.lvBadAv.has(u));
-function pickAvatar(ss) {
-    const id = (ss.find(s => s.discordId) || {}).discordId || "";
-    const real = ss.find(s => REAL_AV_RE.test(s.avatar) && !badAv(s.avatar));
-    if (real) { rememberAvatar(id, real.avatar); return real.avatar; }
-    if (id && avCache.has(id)) {
-        if (!badAv(avCache.get(id))) return avCache.get(id);
-        avCache.delete(id);
-        try { localStorage.setItem(AV_CACHE_KEY, JSON.stringify(Object.fromEntries(avCache))); } catch (e) {}
-    }
-    const any = ss.find(s => s.avatar && !badAv(s.avatar));
-    if (any) return any.avatar;
-    const d = defaultAvatar(id);
-    return badAv(d) ? "" : d;
-}
-
-function people(list) {
-    const map = new Map();
-    list.forEach(s => { const k = pkey(s); if (!map.has(k)) map.set(k, []); map.get(k).push(s); });
-    return [...map.entries()].map(([key, ss]) => {
-        ss.sort(rankSession);
-        const kind = ss.map(s => s.kind).sort((a, b) => KIND_ORDER[a] - KIND_ORDER[b])[0];
-        const avatar = kind === "guest" ? "" : pickAvatar(ss);
-        return { key, kind, avatar, main: ss[0], sessions: ss, self: key === myKey() || ss.some(s => s.self) };
-    });
-}
-
-/* --- sprawy --- */
-function caseInfo(c) {
-    if (!c) return null;
-    const incs = g(() => globalIncidents) || [], apps = g(() => globalAppeals) || [];
-    const inc = incs.find(r => r.id === c || r.fiaId === c);
-    if (inc) return { key: inc.id, id: inc.id, label: inc.fiaId || inc.id, inc };
-    const ap = apps.find(a => a.appealId === c || a.id === c);
-    if (ap) {
-        const base = incs.find(r => r.id === ap.caseId || r.fiaId === ap.caseId);
-        return { key: base ? base.id : (ap.caseId || c), id: base ? base.id : "", label: ap.appealId || ap.id, inc: base || null, appeal: ap };
-    }
-    return { key: c, id: "", label: c, inc: null };
-}
-function caseTitle(ci) {
-    if (!ci || !ci.inc) return ci && ci.appeal ? L("Apelacja", "Appeal") : "";
-    const r = ci.inc;
-    return [(r.nick || "?") + " vs " + (r.accusedNick || "?"), r.track, r.split, r.status].filter(Boolean).join(" · ");
-}
-function caseChip(c) {
-    const ci = caseInfo(c);
-    if (!ci) return "";
-    const t = caseTitle(ci);
-    return ci.id
-        ? `<button type="button" class="lv-case" data-lv-case="${esc(ci.id)}" title="${esc(t ? t + " — " : "")}${esc(L("kliknij, aby otworzyć sprawę", "click to open the case"))}">${esc(ci.label)}</button>`
-        : `<span class="lv-case"${t ? ` title="${esc(t)}"` : ""}>${esc(ci.label)}</span>`;
-}
-function actHtml(s) {
-    let h = `<span class="lv-ico">${actIcon(s.act)}</span>${esc(actLabel(s.act))}`;
-    if (s.c) h += caseChip(s.c);
-    else if (s.act === "schat") h += ` <span class="lv-dim">${esc(L("(bez wybranej sprawy)", "(no case selected)"))}</span>`;
-    if (s.act === "form" && s.x === "closed") h += ` <span class="lv-dim">· ${esc(L("zgłoszenia zamknięte", "reports closed"))}</span>`;
-    else if (s.x && (s.act === "report" || s.act === "report_preview")) h += ` <span class="lv-dim">· ${esc(s.x)}</span>`;
-    else if (s.x && s.act === "appeal_verdict") h += ` <span class="lv-dim">· ${esc(s.x)}</span>`;
-    return h;
-}
-
-/* --- czas --- */
-function ago(t) {
-    if (!t) return "";
-    const s = Math.max(0, Math.round((sNow() - t) / 1000));
-    if (s < 60) return s + " s";
-    const m = Math.floor(s / 60);
-    if (m < 60) return m + " min";
-    return Math.floor(m / 60) + " h " + (m % 60) + " min";
-}
-const hhmm = t => { const d = new Date(t - serverOffset); return isNaN(d) ? "" : d.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" }); };
-function hue(str) { let h = 0; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360; return h; }
-const firstName = n => { const s = String(n || "?").trim(); return s.length > 14 ? s.slice(0, 13) + "…" : s; };
-
-/* --- zmiany (oś zdarzeń) --- */
-function pushFeed(t, s, type) {
-    const last = R.feed[0], pk = pkey(s);
-    // odświeżenie strony = „opuszcza” + po chwili „wchodzi / loguje się” → nie zaśmiecamy osi
-    if (type === "join" || type === "login") {
-        const i = R.feed.findIndex(f => f.pk === pk && (f.type === "leave" || f.type === "logout") && t - f.t < 20000);
-        if (i >= 0) { R.feed.splice(i, 1); return; }
-    }
-    const item = { t, sid: s.sid, pk, name: s.name, kind: s.kind, type, act: s.act, c: s.c, x: s.x };
-    // ten sam człowiek przeskakuje szybko między zakładkami → nadpisz zamiast mnożyć wpisy
-    if (last && last.sid === s.sid && type === "act" && last.type === "act" && t - last.t < 20000) R.feed[0] = item;
-    else R.feed.unshift(item);
-    if (R.feed.length > 80) R.feed.length = 80;
-}
-function diffFeed(list) {
-    if (!(R.loaded[0] && R.loaded[1])) return; // punkt odniesienia dopiero, gdy oba węzły są wczytane
-    const cur = new Map(list.map(s => [s.sid, s]));
-    if (R.prev) {
-        const t = sNow();
-        const prevKeys = new Set([...R.prev.values()].map(pkey)), curKeys = new Set(list.map(pkey));
-        cur.forEach((s, sid) => {
-            if (s.self || s.kind === "guest" && !R.prev.has(sid)) return;
-            const p = R.prev.get(sid);
-            if (!p) { if (!prevKeys.has(pkey(s))) pushFeed(t, s, "join"); }
-            else if (p.kind !== s.kind) pushFeed(t, s.kind === "guest" ? p : s, s.kind === "guest" ? "logout" : "login");
-            else if (s.kind !== "guest" && (p.act !== s.act || p.c !== s.c)) pushFeed(t, s, "act");
-        });
-        R.prev.forEach((p, sid) => {
-            if (!cur.has(sid) && !p.self && p.kind !== "guest" && !curKeys.has(pkey(p))) pushFeed(t, p, "leave");
-        });
-    }
-    R.prev = cur;
-}
-
-function onData() {
-    R.lastData = Date.now();
-    diffFeed(sessions());
-    updateMenu();
-    renderLive();
-    localViews();
-}
-
-/* ============================================================
-   4. INTERFEJS: przycisk w menu + zakładka „Na żywo”
-   ============================================================ */
-const statsBtn = $("statsMenuBtn");
-const menuHtml = `<button id="liveMenuBtn" type="button" style="display:none;" onclick="openLiveSection()" title="Kto jest teraz na stronie i co robi"><span class="lv-pulse"></span><span id="liveMenuLabel">Na żywo</span><span class="lv-count" id="liveMenuCount"></span></button>`;
-if (statsBtn) statsBtn.insertAdjacentHTML("afterend", menuHtml);
-else { const m = document.querySelector(".card .menu"); if (m) m.insertAdjacentHTML("beforeend", menuHtml); }
-
-const anchor = $("usersSection") || $("statsSection");
-const sectionHtml = `
-  <div id="liveSection" class="section">
-    <div class="lv-head">
-      <h2 class="section-title" id="lvTitle" style="margin-bottom:0;">🟢 Na żywo — kto co robi</h2>
-      <div class="lv-conn" id="lvConn"></div>
-    </div>
-    <p class="subtitle" id="lvSubtitle" style="margin:8px 0 0;"></p>
-    <div class="lv-tiles" id="lvTiles"></div>
-    <div class="split-tabs" id="lvTabs">
-      <button type="button" class="split-tab-btn active" data-lv-filter="all"></button>
-      <button type="button" class="split-tab-btn" data-lv-filter="staff"></button>
-      <button type="button" class="split-tab-btn" data-lv-filter="drivers"></button>
-      <button type="button" class="split-tab-btn" data-lv-filter="guests"></button>
-    </div>
-    <div class="lv-layout">
-      <div id="lvPeople"></div>
-      <aside class="lv-side">
-        <div class="stats-group-box"><div class="stats-group-title" id="lvCasesTitle"></div><div id="lvCases"></div></div>
-        <div class="stats-group-box"><div class="stats-group-title" id="lvFeedTitle"></div><div id="lvFeed"></div></div>
-      </aside>
-    </div>
-    <details class="lv-diag" id="lvDiag">
-      <summary id="lvDiagSummary"></summary>
-      <div id="lvDiagBody"></div>
-    </details>
-  </div>`;
-if (anchor) anchor.insertAdjacentHTML("afterend", sectionHtml);
-else { const card = document.querySelector(".card"); if (card) card.insertAdjacentHTML("beforeend", sectionHtml); }
-
-// ostrzeżenie w panelu werdyktu + informacja w oknie sprawy
-const respForm = $("responseForm");
-if (respForm) respForm.insertAdjacentHTML("beforebegin", `<div id="lvVerdictWarn" role="status"></div>`);
-const descHead = $("descModalTitle") && $("descModalTitle").parentElement;
-if (descHead) descHead.insertAdjacentHTML("afterend", `<div id="lvDescViewers"></div>`);
-
-const liveActive = () => { const s = $("liveSection"); return !!s && s.classList.contains("active"); };
-
-window.openLiveSection = function () {
-    if (!canView()) { alert(L("Podgląd na żywo jest dostępny tylko dla Głównego Stewarda.", "The live view is available to the Lead Steward only.")); return; }
-    showSection("liveSection");
-    listen(true);
-    renderLive();
-};
-
-function updateMenu() {
-    const btn = $("liveMenuBtn");
-    if (!btn) return;
-    const staff = canView();
-    btn.style.display = staff ? "block" : "none";
-    if (!staff) { if (liveActive()) showSection("formSection"); return; }
-    const lbl = $("liveMenuLabel"); if (lbl) lbl.textContent = L("Na żywo", "Live");
-    const ppl = people(sessions()).filter(p => !p.self);
-    const cnt = $("liveMenuCount"); if (cnt) cnt.textContent = ppl.length ? String(ppl.length) : "";
-    const k = kk => ppl.filter(p => kk.includes(p.kind)).length;
-    btn.title = L(`Teraz na stronie: stewardzi ${k(["steward", "judge"])}, kierowcy ${k(["driver"])}, goście ${k(["guest"])}`,
-                  `On the site now: stewards ${k(["steward", "judge"])}, drivers ${k(["driver"])}, guests ${k(["guest"])}`);
-    btn.style.borderBottomColor = liveActive() ? "var(--green-text)" : "transparent";
-}
-
-function personHtml(p) {
-    const s = p.main, nm = s.name;
-    const initial = esc(nm.trim().charAt(0).toUpperCase() || "?");
-    // Zdjęcie nie wczyta się (np. ktoś zmienił awatar na Discordzie) → domyślny awatar Discorda, a gdy i to zawiedzie — litera pod spodem.
-    const av = p.avatar || "", fb = badAv(defaultAvatar(s.discordId)) ? "" : defaultAvatar(s.discordId);
-    const img = av ? `<img src="${esc(av)}" alt="" loading="lazy" referrerpolicy="no-referrer"${fb && fb !== av ? ` data-fb="${esc(fb)}"` : ""} onerror="(window.lvBadAv=window.lvBadAv||new Set()).add(this.getAttribute('src'));if(this.dataset.fb){this.src=this.dataset.fb;this.removeAttribute('data-fb')}else{this.remove()}">` : "";
-    const avatar = `<div class="lv-av" style="background:hsl(${hue(nm)},45%,36%)">${initial}${img}<i class="st-${esc(s.state)}" title="${esc(stateLabel(s.state))}"></i></div>`;
-    const rank = s.rank && p.kind === "steward" && s.rank.toLowerCase() !== "steward" ? " · " + s.rank : "";
-    const meta = [];
-    if (s.state === "idle") meta.push(`<span class="lv-warn">💤 ${esc(L("bezczynny (brak ruchu > 3 min)", "idle (no activity > 3 min)"))}</span>`);
-    if (s.state === "hidden") meta.push(`<span>🌙 ${esc(L("karta w tle", "tab in background"))}</span>`);
-    const voice = p.sessions.find(x => x.voice), call = p.sessions.find(x => x.call);
-    if (voice) meta.push(`<span>🎧 ${esc(voice.voice)}</span>`);
-    if (call) { const ci = caseInfo(call.call); meta.push(`<span>📞 ${esc(L("rozmowa", "call"))}${ci ? " · " + esc(ci.label) : ""}</span>`); }
-    meta.push(`<span>${s.dev === "mobile" ? "📱 " + esc(L("telefon", "phone")) : "💻 " + esc(L("komputer", "computer"))}</span>`);
-    const joined = Math.min(...p.sessions.map(x => x.joinedAt || Infinity));
-    if (isFinite(joined)) meta.push(`<span>${esc(L("na stronie od", "online since"))} ${esc(hhmm(joined))}</span>`);
-    if (p.sessions.length > 1) {
-        const rest = p.sessions.slice(1).map(x => actIcon(x.act) + " " + actLabel(x.act) + (x.c ? " " + (caseInfo(x.c) || {}).label : "")).join(", ");
-        meta.push(`<span title="${esc(rest)}">🗂 ${esc(L(`${p.sessions.length} karty`, `${p.sessions.length} tabs`))}: ${esc(rest.length > 70 ? rest.slice(0, 69) + "…" : rest)}</span>`);
-    }
-    const typing = p.sessions.some(x => x.typing) ? `<span class="lv-typing">✍️ ${esc(L("pisze", "typing"))}<span class="lv-dots"></span></span>` : "";
-    return `<div class="lv-person k-${esc(p.kind)} st-${esc(s.state)}${p.self ? " me" : ""}">
-      ${avatar}
-      <div class="lv-main">
-        <div class="lv-top"><span class="lv-name">${esc(nm)}${p.self ? `<em>(${esc(L("Ty", "You"))})</em>` : ""}</span><span class="lv-kind k-${esc(p.kind)}">${esc(kindLabel(p.kind) + rank)}</span><span class="lv-since" title="${esc(L("Jak długo trwa obecna czynność", "How long the current activity has lasted"))}">⏱ ${esc(ago(s.since))}</span></div>
-        <div class="lv-act">${actHtml(s)}${typing}</div>
-        <div class="lv-meta">${meta.join("")}</div>
-      </div>
-    </div>`;
-}
-const stateLabel = st => st === "idle" ? L("bezczynny", "idle") : st === "hidden" ? L("karta w tle", "background tab") : L("aktywny", "active");
-
-function guestsHtml(guests) {
-    if (!guests.length) return "";
-    const counts = new Map();
-    guests.forEach(p => { const k = p.main.act + (p.main.x === "closed" ? "|closed" : ""); counts.set(k, (counts.get(k) || 0) + 1); });
-    const parts = [...counts.entries()].sort((a, b) => b[1] - a[1])
-        .map(([k, n]) => `${actIcon(k.split("|")[0])} ${esc(actLabel(k.split("|")[0]))}${n > 1 ? ` <b>×${n}</b>` : ""}`).join(" &nbsp;·&nbsp; ");
-    const mobile = guests.filter(p => p.main.dev === "mobile").length;
-    return `<div class="lv-person k-guest">
-      <div class="lv-av" style="background:#475569;">👀</div>
-      <div class="lv-main">
-        <div class="lv-top"><span class="lv-name">${esc(L("Goście (niezalogowani)", "Guests (not logged in)"))}: ${guests.length}</span></div>
-        <div class="lv-act">${parts}</div>
-        <div class="lv-meta"><span>📱 ${mobile} · 💻 ${guests.length - mobile}</span><span>${esc(L("Szczegóły w zakładce „Goście”.", "Details in the “Guests” tab."))}</span></div>
-      </div>
-    </div>`;
-}
-
-function casesHtml(list) {
-    const groups = new Map();
-    list.filter(s => s.c && s.kind !== "guest").forEach(s => {
-        const ci = caseInfo(s.c), k = ci.key;
-        if (!groups.has(k)) groups.set(k, { ci, ss: [] });
-        groups.get(k).ss.push(s);
-    });
-    if (!groups.size) return `<div class="lv-empty">${esc(L("Nikt nie ma teraz otwartej żadnej sprawy.", "Nobody has a case open right now."))}</div>`;
-    const arr = [...groups.values()].map(gr => {
-        const byPerson = new Map();
-        gr.ss.sort(rankSession).forEach(s => { if (!byPerson.has(pkey(s))) byPerson.set(pkey(s), s); });
-        const ss = [...byPerson.values()];
-        const workers = ss.filter(s => (s.kind === "steward" || s.kind === "judge") && WORK.has(s.act));
-        return { ci: gr.ci, ss, conflict: workers.length >= 2 };
-    }).sort((a, b) => (b.conflict - a.conflict) || (b.ss.length - a.ss.length));
-    return arr.map(gr => {
-        const title = caseTitle(gr.ci);
-        return `<div class="lv-cg">
-          <div class="lv-cg-head">${caseChip(gr.ci.id || gr.ci.label)}${gr.conflict ? `<span class="lv-conflict" title="${esc(L("Kilku stewardów pracuje naraz nad tą sprawą", "Several stewards are working on this case at once"))}">⚠️ ${esc(L("kolizja", "clash"))}</span>` : ""}</div>
-          ${title ? `<div class="lv-cg-sub">${esc(title)}</div>` : ""}
-          <div class="lv-cg-who">${gr.ss.map(s => `<span>${actIcon(s.act)} <b>${esc(s.name)}</b>${s.self ? " (" + esc(L("Ty", "You")) + ")" : ""} <span class="lv-dim">— ${esc(actLabel(s.act).toLowerCase())}${s.typing ? ", " + esc(L("pisze…", "typing…")) : ""}</span></span>`).join("")}</div>
-        </div>`;
-    }).join("");
-}
-
-function feedHtml() {
-    if (!R.feed.length) return `<div class="lv-empty">${esc(L("Tu pojawią się wejścia, wyjścia i zmiany czynności — od chwili otwarcia panelu.", "Arrivals, departures and activity changes will appear here — since you opened the panel."))}</div>`;
-    return R.feed.slice(0, 30).map(f => {
-        let what;
-        if (f.type === "join") what = `${esc(L("wchodzi na stronę", "arrives"))} — ${actIcon(f.act)} ${esc(actLabel(f.act).toLowerCase())}${f.c ? caseChip(f.c) : ""}`;
-        else if (f.type === "leave") what = `<span class="lv-dim">${esc(L("opuszcza stronę", "leaves"))}</span>`;
-        else if (f.type === "login") what = `${esc(L("loguje się", "logs in"))} — ${esc(kindLabel(f.kind).toLowerCase())}`;
-        else if (f.type === "logout") what = `<span class="lv-dim">${esc(L("wylogowuje się", "logs out"))}</span>`;
-        else what = `→ ${actIcon(f.act)} ${esc(actLabel(f.act).toLowerCase())}${f.c ? caseChip(f.c) : ""}`;
-        return `<div class="lv-fi"><span class="lv-ft">${esc(hhmm(f.t))}</span><span><b>${esc(f.name)}</b> ${what}</span></div>`;
-    }).join("");
-}
-
-function renderLive() {
-    if (!liveActive()) return;
-    const list = sessions(), ppl = people(list);
-    const staff = ppl.filter(p => p.kind === "steward" || p.kind === "judge");
-    const drivers = ppl.filter(p => p.kind === "driver"), guests = ppl.filter(p => p.kind === "guest");
-    const typingN = ppl.filter(p => p.sessions.some(s => s.typing)).length;
-    const voiceN = ppl.filter(p => p.sessions.some(s => s.voice || s.call)).length;
-
-    $("lvTitle").textContent = L("🟢 Na żywo — kto co robi", "🟢 Live — who is doing what");
-    $("lvSubtitle").textContent = L("Aktualizuje się samo, w czasie rzeczywistym. Widać czynności (zakładka, sprawa, okno, „pisze…”) — nigdy treść wpisywana w pola.",
-                                    "Updates by itself, in real time. Shows activities (tab, case, window, “typing…”) — never what people type.");
-    const tile = (lbl, n, hot) => `<div class="stat-box${hot ? " hot" : ""}"><span>${esc(lbl)}</span><strong>${esc(n)}</strong></div>`;
-    $("lvTiles").innerHTML = tile(L("Online", "Online"), ppl.length) + tile(L("Stewardzi", "Stewards"), staff.length) + tile(L("Kierowcy", "Drivers"), drivers.length)
-        + tile(L("Goście", "Guests"), guests.length) + tile(L("Piszą teraz", "Typing now"), typingN, typingN > 0) + tile(L("Głos / rozmowy", "Voice / calls"), voiceN);
-
-    const tabLbl = { all: [L("Wszyscy", "Everyone"), ppl.length], staff: [L("Stewardzi", "Stewards"), staff.length], drivers: [L("Kierowcy", "Drivers"), drivers.length], guests: [L("Goście", "Guests"), guests.length] };
-    document.querySelectorAll("#lvTabs [data-lv-filter]").forEach(b => {
-        const f = b.dataset.lvFilter; b.textContent = tabLbl[f][0] + " (" + tabLbl[f][1] + ")"; b.classList.toggle("active", f === R.filter);
-    });
-
-    const sortP = arr => arr.slice().sort((a, b) => (a.self - b.self) || (KIND_ORDER[a.kind] - KIND_ORDER[b.kind]) || (STATE_ORDER[a.main.state] - STATE_ORDER[b.main.state]) || a.main.name.localeCompare(b.main.name, "pl"));
-    let html = "";
-    if (R.filter === "all") html = sortP(staff.concat(drivers)).map(personHtml).join("") + guestsHtml(guests);
-    else if (R.filter === "staff") html = sortP(staff).map(personHtml).join("");
-    else if (R.filter === "drivers") html = sortP(drivers).map(personHtml).join("");
-    else html = sortP(guests).map(p => personHtml(Object.assign({}, p, { main: Object.assign({}, p.main, { name: L("Gość", "Guest") + " · " + p.main.sid.slice(0, 4) }) }))).join("");
-    if (!html) html = `<div class="lv-empty">${esc(R.filter === "all" ? L("Nikogo poza Tobą nie ma teraz na stronie.", "Nobody but you is on the site right now.") : L("Brak osób w tej grupie.", "Nobody in this group."))}</div>`;
-    const loading = !(R.loaded[0] && R.loaded[1]);
-    if (loading && !ppl.length) html = `<div class="lv-empty">${esc(L("Łączenie…", "Connecting…"))}</div>`;
-    $("lvPeople").innerHTML = html;
-
-    $("lvCasesTitle").textContent = L("⚖️ Przy sprawach", "⚖️ Working on cases");
-    $("lvCases").innerHTML = casesHtml(list);
-    $("lvFeedTitle").textContent = L("🕒 Ostatnie zmiany", "🕒 Recent changes");
-    $("lvFeed").innerHTML = feedHtml();
-    renderConn();
-    renderDiag();
-}
-
-function renderConn() {
-    const el = $("lvConn");
-    if (!el) return;
-    const bad = W.mode === "denied" || (R.err[0] && R.err[1]);
-    if (bad) {
-        el.className = "lv-conn warn";
-        el.innerHTML = `⚠️ ${esc(L("problem z zapisem/odczytem — zobacz Diagnostykę", "write/read problem — see Diagnostics"))}`;
-    } else {
-        el.className = "lv-conn";
-        el.innerHTML = `<span class="lv-pulse"></span>${esc(L("na żywo", "live"))}${R.lastData ? " · " + esc(L("ostatnia zmiana", "last change")) + " " + esc(new Date(R.lastData).toLocaleTimeString("pl-PL")) : ""}`;
-    }
-}
-
-const RULES_SNIPPET = `"presence": {
-  ".read": "auth != null && (root.child('stewards').child(auth.uid).exists() || auth.token.owner === true)",
-  "$sesja": {
-    ".write": "auth != null && $sesja.matches(/^[a-z0-9]{8,24}$/)",
-    ".validate": "newData.hasChildren(['kind', 'name', 'act']) && newData.child('name').isString() && newData.child('name').val().length <= 60"
-  }
-},`;
-function renderDiag() {
-    const body = $("lvDiagBody"), sum = $("lvDiagSummary");
-    if (!body || !liveActive()) return;
-    sum.textContent = L("⚙️ Diagnostyka i reguły Firebase", "⚙️ Diagnostics and Firebase rules");
-    const wr = W.mode === "ok" ? `<span class="lv-ok">✅ presence</span>`
-        : W.mode === "fallback" ? `<span class="lv-mid">🟡 voiceMembers/_presence — ${esc(L("węzeł zapasowy (reguły nie pozwalają pisać w presence)", "fallback node (rules do not allow writing to presence)"))}</span>`
-        : W.mode === "denied" ? `<span class="lv-bad">❌ ${esc(L("zapis odrzucony w obu węzłach", "write rejected in both nodes"))}: ${esc(W.err)}</span>`
-        : `<span class="lv-dim">${esc(L("łączenie…", "connecting…"))}</span>`;
-    const rd = i => R.err[i] ? `<span class="lv-bad">❌ ${esc(R.err[i])}</span>` : R.loaded[i] ? `<span class="lv-ok">✅ ${Object.keys(R.data[i] || {}).length} ${esc(L("wpisów", "entries"))}</span>` : `<span class="lv-dim">…</span>`;
-    body.innerHTML = `
-      <div>${esc(L("Ta karta zapisuje obecność w", "This tab writes presence to"))}: ${wr}</div>
-      <div>${esc(L("Odczyt", "Read"))} presence: ${rd(0)} · ${esc(L("odczyt", "read"))} voiceMembers/_presence: ${rd(1)}</div>
-      <div class="lv-dim">${esc(L("ID tej karty", "This tab's ID"))}: ${esc(SID)}</div>
-      <p style="margin:10px 0 0;">${esc(L(
-        "Każda karta dodaje jeden mały wpis, który Firebase usuwa sam po jej zamknięciu. Docelowo wpisy powinny trafiać do węzła presence. Jeśli powyżej widać węzeł zapasowy albo błąd, dodaj w konsoli Firebase (Realtime Database → Reguły) poniższy fragment wewnątrz \"rules\": { … } — obok pozostałych węzłów — i kliknij Opublikuj. Odczyt mają tylko stewardzi i właściciele ligi, a zapisywać może tylko zalogowany.",
-        "Each tab adds one small entry that Firebase removes by itself when the tab closes. Entries should go to the presence node. If you see the fallback node or an error above, add the snippet below inside \"rules\": { … } in the Firebase console (Realtime Database → Rules), next to the other nodes, and click Publish. Only stewards and league owners can read it; only logged-in users can write."))}</p>
-      <pre id="lvRulesPre">${esc(RULES_SNIPPET)}</pre>
-      <button type="button" class="btn-secondary" style="padding:6px 14px; font-size:11px;" data-lv="copy-rules">📋 ${esc(L("Kopiuj fragment reguł", "Copy rules snippet"))}</button>`;
-}
-
-/* ---------- interakcje ---------- */
-document.addEventListener("click", e => {
-    const caseBtn = e.target.closest && e.target.closest("[data-lv-case]");
-    if (caseBtn) {
-        e.preventDefault();
-        const id = caseBtn.getAttribute("data-lv-case");
-        if (id && typeof openDescModal === "function" && canView()) openDescModal(id);
-        return;
-    }
-    const tab = e.target.closest && e.target.closest("#lvTabs [data-lv-filter]");
-    if (tab) { R.filter = tab.dataset.lvFilter; renderLive(); return; }
-    if (e.target.closest && e.target.closest("#lvConn.warn")) { const d = $("lvDiag"); if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); } return; }
-    const copy = e.target.closest && e.target.closest("[data-lv='copy-rules']");
-    if (copy) {
-        const done = () => { copy.textContent = "✓ " + L("Skopiowano", "Copied"); setTimeout(renderDiag, 1600); };
-        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(RULES_SNIPPET).then(done, () => selectPre());
-        else selectPre();
-    }
-});
-function selectPre() { const pre = $("lvRulesPre"); if (!pre) return; const r = document.createRange(); r.selectNodeContents(pre); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); }
-
-/* ============================================================
-   5. KOORDYNACJA W PANELU (znaczniki w tabeli, panel werdyktu, okno sprawy)
-   ============================================================ */
-function othersOnCases() {
-    const mine = myKey(), map = new Map();
-    if (!R.on) return map;
-    sessions().forEach(s => {
-        if (!s.c || s.kind === "guest" || pkey(s) === mine) return;
-        const ci = caseInfo(s.c);
-        if (!map.has(ci.key)) map.set(ci.key, []);
-        map.get(ci.key).push(s);
-    });
-    map.forEach((arr, k) => { // jedna osoba = jeden wpis (najważniejsza karta)
-        const by = new Map(); arr.sort(rankSession).forEach(s => { if (!by.has(pkey(s))) by.set(pkey(s), s); });
-        map.set(k, [...by.values()]);
-    });
-    return map;
-}
-const whoLine = arr => arr.map(s => `<b>${esc(s.name)}</b> (${esc(actLabel(s.act).toLowerCase())}${s.since ? ", " + esc(ago(s.since)) : ""})`).join(", ");
-
-let rowSig = "";
-function decorateAdminRows(force) {
-    const body = $("adminTableBody");
-    if (!body) return;
-    const map = othersOnCases();
-    const sig = JSON.stringify([...map.entries()].map(([k, a]) => [k, a.map(s => s.sid + s.act)]));
-    if (!force && sig === rowSig) return;
-    rowSig = sig;
-    body.querySelectorAll(".lv-rowchips").forEach(el => el.remove());
-    if (!map.size) return;
-    body.querySelectorAll(".admin-row-cb").forEach(cb => {
-        const arr = map.get(cb.dataset.id), tr = cb.closest("tr");
-        if (!arr || !tr || !tr.children[1]) return;
-        const chips = arr.map(s => `<span class="case-chip lv-chip k-${esc(s.kind)}${WORK.has(s.act) ? " work" : ""}" title="${esc(s.name + " — " + actLabel(s.act) + (s.since ? " (" + ago(s.since) + ")" : ""))}">${s.kind === "driver" ? "🟢" : actIcon(s.act)} ${esc(firstName(s.name))}</span>`).join("");
-        tr.children[1].insertAdjacentHTML("beforeend", `<div class="lv-rowchips">${chips}</div>`);
-    });
-}
-
-function renderVerdictWarn() {
-    const box = $("lvVerdictWarn");
-    if (!box) return;
-    const v = canView() && shown("adminSection") ? verdictTarget() : null;
-    const ci = v ? caseInfo(v.c) : null;
-    const arr = ci ? (othersOnCases().get(ci.key) || []).filter(s => s.kind === "steward" || s.kind === "judge") : [];
-    if (!arr.length) { box.style.display = "none"; box.innerHTML = ""; return; }
-    const work = arr.filter(s => WORK.has(s.act)), view = arr.filter(s => !WORK.has(s.act));
-    box.className = work.length ? "work" : "view";
-    box.innerHTML = work.length
-        ? `⚠️ ${esc(L("Uwaga — nad tą sprawą pracuje teraz także", "Heads-up — also working on this case right now"))}: ${whoLine(work)}. ${esc(L("Ustalcie, kto wydaje werdykt.", "Agree on who issues the verdict."))}${view.length ? `<br>👁 ${esc(L("Podgląd", "Viewing"))}: ${whoLine(view)}` : ""}`
-        : `👁 ${esc(L("Tę sprawę ma teraz otwartą", "Also has this case open"))}: ${whoLine(view)}`;
-    box.style.display = "block";
-}
-
-function renderDescViewers() {
-    const box = $("lvDescViewers");
-    if (!box) return;
-    const id = canView() && shown("descModal") ? g(() => currentlyEditedReportId) : null;
-    const arr = id ? (othersOnCases().get((caseInfo(id) || {}).key || id) || []) : [];
-    if (!arr.length) { box.style.display = "none"; box.innerHTML = ""; return; }
-    box.className = arr.some(s => (s.kind === "steward" || s.kind === "judge") && WORK.has(s.act)) ? "work" : "";
-    box.innerHTML = `🟢 ${esc(L("Teraz przy tej sprawie", "Right now on this case"))}: ${whoLine(arr)}`;
-    box.style.display = "block";
-}
-
-function localViews() {
-    try { decorateAdminRows(false); renderVerdictWarn(); renderDescViewers(); updateMenu(); }
-    catch (e) { console.error("[128] widoki", e); }
-}
-
-/* --- podpięcie pod istniejące funkcje (natychmiastowa reakcja zamiast czekania na tick) --- */
-function after(name, fn) {
+function wrap(name, after) {
     const orig = window[name];
     if (typeof orig !== "function") return;
     window[name] = function () {
         const r = orig.apply(this, arguments);
-        try { fn.apply(this, arguments); } catch (e) { console.error("[128] " + name, e); }
+        try { after.apply(this, arguments); } catch (e) { console.error("[132] " + name, e); }
         return r;
     };
 }
-after("showSection", id => { kick(); if (id === "liveSection") renderLive(); });
-after("renderAdmin", () => decorateAdminRows(true));
-["openDescModal", "closeDescModal", "toggleEditMode", "transferToVerdictPanel", "transferAppealToVerdict",
- "openAppealEditModal", "closeAppealEditModal", "openAppealVerdictEditModal", "closeAppealVerdictEditModal",
- "selectPlayerChatCase", "deselectPlayerChatCase", "handleStewardChatSelection", "openReportPreview", "closeReportPreview",
- "adminLogout", "logoutDiscordDriver", "finalizeAutoLogin", "toggleLang"].forEach(n => after(n, () => { kick(); if (n === "toggleLang") renderLive(); }));
-document.addEventListener("focusin", e => { if (e.target && e.target.id === "modalNotesField") kick(); });
-document.addEventListener("focusout", e => { if (e.target && e.target.id === "modalNotesField") setTimeout(kick, 50); });
+// Odczyt zmiennych strony (zadeklarowanych przez let w głównym skrypcie) bez wywracania się, gdy ich nie ma.
+const G = {
+    isEditModeActive: () => typeof isEditModeActive !== "undefined" ? isEditModeActive : false,
+    currentlyEditedReportId: () => typeof currentlyEditedReportId !== "undefined" ? currentlyEditedReportId : null,
+    currentlyEditedAppealId: () => typeof currentlyEditedAppealId !== "undefined" ? currentlyEditedAppealId : null,
+    currentlyEditedAppealVerdictCaseId: () => typeof currentlyEditedAppealVerdictCaseId !== "undefined" ? currentlyEditedAppealVerdictCaseId : null,
+    loggedInSteward: () => typeof loggedInSteward !== "undefined" ? loggedInSteward : null,
+    isAdminAuthenticated: () => typeof isAdminAuthenticated !== "undefined" ? isAdminAuthenticated : false,
+    discordDriverAuth: () => typeof discordDriverAuth !== "undefined" ? discordDriverAuth : null,
+    globalIncidents: () => typeof globalIncidents !== "undefined" ? globalIncidents : [],
+    globalStewards: () => typeof globalStewards !== "undefined" ? globalStewards : [],
+    globalLogs: () => typeof globalLogs !== "undefined" ? globalLogs : []
+};
+const g = name => (G[name] ? G[name]() : undefined);
 
-// Start chwilę po wczytaniu strony — żeby zdążyło się odtworzyć logowanie kierowcy/stewarda
-// (inaczej każde odświeżenie wyglądałoby jak „gość → loguje się”).
-function start() {
-    if (started) return;
-    started = true;
-    tick();
-    setInterval(tick, 1000);
-    setInterval(() => { if (liveActive()) renderLive(); }, 5000);
+/* ============================================================
+   1. WYKRYWANIE, CO ROBI TA KARTA
+   ============================================================ */
+let lastInputAt = 0, lastInputArea = null, lastInteractAt = Date.now(), lastVerdictTouch = 0;
+
+function areaOf(el) {
+    if (!el || !el.closest) return null;
+    if (el.closest("#verdictVotesBox")) return "vote";
+    if (el.closest("#verdictPanel")) return "verdict";
+    if (el.closest("#descModal")) return "desc";
+    if (el.closest("#appealEditModal")) return "appeal_edit";
+    if (el.closest("#appealVerdictEditModal")) return "appeal_verdict_edit";
+    if (el.closest("#statementModal")) return "statement";
+    if (el.closest("#bulletinModal")) return "bulletin";
+    if (el.closest("#playerChatBoxContainer")) return "player_chat";
+    if (el.closest("#chatSection")) return "steward_chat";
+    if (el.closest("#formSection")) return "report_form";
+    if (el.closest("#appealSection")) return "appeal_form";
+    return null;
 }
-if (document.readyState === "complete") setTimeout(start, 1500);
-else window.addEventListener("load", () => setTimeout(start, 1500));
-setTimeout(start, 8000); // gdyby zdarzenie load się opóźniało (np. wolne zasoby zewnętrzne)
-window.fiaLive = { sid: SID, state: () => ({ write: Object.assign({}, W), read: { on: R.on, err: R.err.slice(), loaded: R.loaded.slice() }, sessions: sessions() }) };
+function markInteract(e) {
+    lastInteractAt = Date.now();
+    const a = areaOf(e && e.target);
+    if (a === "verdict" || a === "vote") lastVerdictTouch = Date.now();
+    if (lastState === "idle") schedule();
+}
+// „Pisze” liczymy tylko przy polach tekstowych — wybór z listy albo zaznaczenie pola to nie pisanie.
+const isTextField = el => !!el && (el.isContentEditable || el.tagName === "TEXTAREA" ||
+    (el.tagName === "INPUT" && /^(text|search|url|email|number|tel)?$/i.test(el.getAttribute("type") || "")));
+document.addEventListener("input", e => {
+    if (isTextField(e.target)) { lastInputAt = Date.now(); lastInputArea = areaOf(e.target); }
+    markInteract(e); schedule();
+}, true);
+["keydown", "pointerdown", "wheel", "touchstart"].forEach(t => document.addEventListener(t, e => { markInteract(e); if (t === "pointerdown") schedule(); }, { capture: true, passive: true }));
+let moveThrottle = 0;
+document.addEventListener("mousemove", e => { const t = Date.now(); if (t - moveThrottle > 5000) { moveThrottle = t; markInteract(e); } }, { passive: true });
+document.addEventListener("focusin", schedule, true);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) lastInteractAt = Date.now(); schedule(); });
+
+function shown(id) {
+    const el = $(id);
+    if (!el) return false;
+    const cs = getComputedStyle(el);
+    return cs.display !== "none" && cs.visibility !== "hidden" && el.getClientRects().length > 0;
+}
+function inView(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return r.height > 0 && r.top < innerHeight * 0.85 && r.bottom > innerHeight * 0.15;
+}
+const typingIn = area => lastInputArea === area && Date.now() - lastInputAt < TYPING_MS;
+const SECTION_ACT = {
+    trashSection: "trash", statsSection: "stats", usersSection: "users", decisionsSection: "decisions",
+    contentEditorSection: "content_editor", presenceSection: "presence"
+};
+
+// { a: kod czynności, c: sprawa / apelacja, t: czy właśnie pisze, n: nazwa nieznanej zakładki }
+function detect() {
+    if (shown("descModal")) return { a: g("isEditModeActive") ? "incident_edit" : "incident_view", c: g("currentlyEditedReportId"), t: typingIn("desc") };
+    if (shown("appealEditModal")) return { a: "appeal_edit", c: g("currentlyEditedAppealId"), t: typingIn("appeal_edit") };
+    if (shown("appealVerdictEditModal")) return { a: "appeal_verdict_edit", c: g("currentlyEditedAppealVerdictCaseId"), t: typingIn("appeal_verdict_edit") };
+    if (shown("statementModal")) {
+        const m = /—\s*(.+)$/.exec(($("statementTitle") && $("statementTitle").textContent) || "");
+        return { a: "statement", c: m ? m[1].trim() : null, t: typingIn("statement") };
+    }
+    if (shown("bulletinModal")) return { a: "bulletin" };
+    if (shown("logVerdictPreviewModal")) return { a: "log_verdict" };
+    if (shown("reportPreviewModal")) return { a: "report_preview" };
+
+    const secEl = document.querySelector(".section.active");
+    const sec = secEl ? secEl.id : "";
+    if (sec === "adminSection") {
+        const cid = (($("caseId") && $("caseId").value) || "").trim();
+        const panel = $("verdictPanel");
+        if (cid && panel && (Date.now() - lastVerdictTouch < 120000 || inView(panel) || panel.contains(document.activeElement))) {
+            const vb = $("verdictVotesBox");
+            if (typingIn("vote") || (vb && vb.contains(document.activeElement))) return { a: "vote", c: cid, t: typingIn("vote") };
+            return { a: "verdict", c: cid, t: typingIn("verdict") };
+        }
+        return { a: "admin_list" };
+    }
+    if (sec === "chatSection") {
+        const v = ($("chatCaseSelect") && $("chatCaseSelect").value) || "";
+        return { a: "steward_chat", c: v || null, t: typingIn("steward_chat") };
+    }
+    if (sec === "historySection") {
+        const lbl = $("playerChatActiveCaseLabel");
+        const c = shown("playerChatInputRow") && lbl ? lbl.textContent.trim() : "";
+        if (c && c !== "-" && (typingIn("player_chat") || inView($("playerChatBoxContainer")))) return { a: "player_chat", c, t: typingIn("player_chat") };
+        return { a: "history" };
+    }
+    if (sec === "formSection") return { a: "report_form", t: typingIn("report_form") };
+    if (sec === "appealSection") return { a: "appeal_form", t: typingIn("appeal_form") };
+    if (SECTION_ACT[sec]) return { a: SECTION_ACT[sec] };
+    const h = secEl && secEl.querySelector(".section-title, h2");
+    return { a: "section", n: h ? short(h.textContent.replace(/^[^\p{L}\p{N}]+/u, ""), 50) : (sec || null) };
+}
+
+let lastState = "active";
+function stateNow() {
+    if (document.hidden) return "away";
+    if (Date.now() - lastInteractAt > IDLE_MS) return "idle";
+    return "active";
+}
+
+/* ============================================================
+   2. ZAPIS OBECNOŚCI W BAZIE (każda zalogowana karta)
+   ============================================================ */
+function identity() {
+    const uid = typeof currentUid === "function" ? currentUid() : null;
+    if (!uid) return null;
+    const st = g("loggedInSteward"), admin = g("isAdminAuthenticated"), drv = g("discordDriverAuth");
+    if (admin && st) return { uid, kind: "team", nick: String(st.nick || "Steward"), role: String(st.role || ""), judge: st.id === "external-judge" };
+    if (drv && String(drv.id) === uid) return { uid, kind: "driver", nick: String(drv.globalName || drv.username || "Kierowca"), role: "" };
+    return null; // sesja jeszcze się wczytuje
+}
+
+let regUid = null, sessRef = null, denied = false, lastSig = "", lastKey = "", actSince = 0, stateSince = 0, timer = null;
+window.rzPresenceDenied = false;
+
+function onWriteErr(err) {
+    const msg = String((err && (err.code || err.message)) || "");
+    if (/permission/i.test(msg)) {
+        if (!denied) console.warn("[132] Baza nie pozwala zapisać obecności (brak reguły dla węzła „presence”).");
+        denied = true;
+        window.rzPresenceDenied = true;
+        try { renderPanel(); } catch (e) {}
+    } else {
+        console.warn("[132] Zapis obecności:", msg);
+    }
+}
+
+function unregister() {
+    if (!sessRef) return;
+    const ref = sessRef;
+    sessRef = null; regUid = null; lastSig = "";
+    ref.onDisconnect().cancel().catch(() => {});
+    ref.remove().catch(() => {});
+}
+
+function register(id) {
+    unregister();
+    regUid = id.uid;
+    sessRef = database.ref(`${PV_PATH}/${id.uid}/sessions/${SID}`);
+    lastSig = "";
+    sessRef.onDisconnect().remove().catch(onWriteErr);
+    database.ref(`${PV_PATH}/${id.uid}/lastSeen`).onDisconnect().set(TS).catch(() => {});
+    // Sprzątanie po kartach, które zniknęły bez rozłączenia (np. awaria przeglądarki).
+    database.ref(`${PV_PATH}/${id.uid}/sessions`).once("value").then(s => {
+        const upd = {};
+        s.forEach(ch => { const v = ch.val() || {}; if (ch.key !== SID && !(Number(v.lastSeen) > now() - CLEANUP_MS)) upd[ch.key] = null; });
+        if (Object.keys(upd).length) database.ref(`${PV_PATH}/${id.uid}/sessions`).update(upd).catch(() => {});
+    }).catch(() => {});
+}
+
+function tick(force) {
+    if (denied) return;
+    const id = identity();
+    if (!id) { unregister(); return; }
+    if (!sessRef || regUid !== id.uid) register(id);
+
+    const d = detect();
+    const st = stateNow();
+    const c = d.c != null && d.c !== "" ? short(d.c, 60) : null;
+    const key = `${d.a}|${c || ""}|${d.n || ""}`;
+    if (key !== lastKey) { lastKey = key; actSince = now(); }
+    if (st !== lastState || !stateSince) { lastState = st; stateSince = now(); }
+
+    const rec = { a: d.a, c, n: d.n || null, t: !!d.t, st, since: actSince, stSince: stateSince, dev: IS_MOBILE ? "m" : "d" };
+    const sig = JSON.stringify(rec) + `|${id.kind}|${id.nick}|${id.role}`;
+    if (!force && sig === lastSig) return;
+    lastSig = sig;
+    sessRef.update(Object.assign({}, rec, { lastSeen: TS })).catch(onWriteErr);
+    database.ref(`${PV_PATH}/${id.uid}`).update({
+        nick: short(id.nick, 60), kind: id.kind, role: id.role ? short(id.role, 40) : null, judge: id.judge ? true : null,
+        lastSeen: TS, last: { a: d.a, c, n: d.n || null }
+    }).catch(onWriteErr);
+}
+function schedule() { clearTimeout(timer); timer = setTimeout(() => tick(false), 350); }
+
+setInterval(() => tick(false), 2000);
+setInterval(() => tick(true), HEARTBEAT_MS);
+database.ref(".info/connected").on("value", s => {
+    // Po zerwaniu połączenia serwer wykonał onDisconnect — po powrocie rejestrujemy kartę od nowa.
+    if (s.val() === true) { regUid = null; sessRef = null; lastSig = ""; SID = newSid(); tick(true); }
+});
+if (typeof authReady !== "undefined" && authReady && authReady.then) authReady.then(() => setTimeout(() => tick(true), 500));
+wrap("finalizeAutoLogin", () => setTimeout(() => tick(true), 0));
+wrap("showSection", () => schedule());
+
+/* ============================================================
+   3. ZAKŁADKA „👀 KTO CO ROBI”
+   ============================================================ */
+const usersSec = $("usersSection");
+const sectionHtml = `
+<div id="presenceSection" class="section">
+  <div class="pv-head">
+    <h2 class="section-title" style="margin-bottom:0;">👀 Kto co robi</h2>
+    <span id="pvLive" class="pv-live off">● łączenie…</span>
+  </div>
+  <p class="subtitle" style="margin-bottom:12px;">Podgląd na żywo: kto jest teraz na stronie i czym się zajmuje — którą sprawę rozpatruje, czy pisze werdykt, głosuje, rozmawia na czacie albo wypełnia formularz. Odświeża się samo.</p>
+  <div class="split-tabs" id="pvTabs">
+    <button type="button" class="split-tab-btn active" data-pv-tab="team">Zespół<span class="pv-tab-count" id="pvCntTeam"></span></button>
+    <button type="button" class="split-tab-btn" data-pv-tab="drivers">Kierowcy<span class="pv-tab-count" id="pvCntDrivers"></span></button>
+  </div>
+  <div id="pvBody" data-te-ui></div>
+  <p class="pv-foot">Widzą to tylko Główny Steward / ROOT i osoby z uprawnieniem USR. „Bezczynny” = brak ruchu myszy i klawiatury od ${IDLE_MS / 60000} min, „karta w tle” = strona otwarta, ale w innej karcie lub zminimalizowana. Kierowcy są pokazywani tylko wtedy, gdy są na stronie.</p>
+</div>`;
+if (usersSec) usersSec.insertAdjacentHTML("afterend", sectionHtml);
+else { const any = document.querySelector(".section"); if (any) any.insertAdjacentHTML("afterend", sectionHtml); }
+
+const menuBtnHtml = `<button id="presenceMenuBtn" type="button" onclick="openPresenceSection()" style="display: none; color: var(--gold); border-bottom: 3px solid transparent;">👀 Kto co robi<span class="pv-badge" id="pvBadge" style="display:none;"></span></button>`;
+const usersBtn = $("usersMenuBtn");
+if (usersBtn) usersBtn.insertAdjacentHTML("afterend", menuBtnHtml);
+else { const menu = document.querySelector(".menu"); if (menu) menu.insertAdjacentHTML("beforeend", menuBtnHtml); }
+
+let pvData = {}, pvErr = null, pvRef = null, pvTab = "team", pvLoaded = false;
+const canView = () => typeof canOpenUsersSection === "function" && canOpenUsersSection();
+const sectionVisible = () => { const s = $("presenceSection"); return !!s && s.classList.contains("active"); };
+
+window.openPresenceSection = function () {
+    if (!canView()) { alert("Podgląd „Kto co robi” jest dostępny dla Głównego Stewarda / ROOT i stewardów z uprawnieniem USR."); return; }
+    startListening();
+    showSection("presenceSection");
+    renderPanel();
+};
+
+$("pvTabs").addEventListener("click", e => {
+    const b = e.target.closest("[data-pv-tab]");
+    if (!b) return;
+    pvTab = b.dataset.pvTab;
+    document.querySelectorAll("#pvTabs [data-pv-tab]").forEach(x => x.classList.toggle("active", x === b));
+    renderPanel();
+});
+$("pvBody").addEventListener("click", e => {
+    const b = e.target.closest("[data-pv-case]");
+    if (b) {
+        const id = b.dataset.pvCase;
+        if (typeof openDescModal === "function" && (g("globalIncidents") || []).some(r => r.id === id)) openDescModal(id);
+        return;
+    }
+    const cp = e.target.closest("[data-pv-copy]");
+    if (cp) {
+        const txt = $("pvRulesSnippet") ? $("pvRulesSnippet").textContent : "";
+        const done = () => { cp.textContent = "✓ Skopiowano"; setTimeout(() => { cp.textContent = "📋 Kopiuj regułę"; }, 2000); };
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done, () => alert(txt));
+        else alert(txt);
+    }
+});
+
+function startListening() {
+    if (pvRef || !canView()) return;
+    pvRef = database.ref(PV_PATH);
+    pvRef.on("value", s => {
+        pvData = s.val() || {};
+        pvErr = null; pvLoaded = true;
+        updateBadge();
+        if (sectionVisible()) renderPanel();
+    }, err => {
+        pvErr = err; pvRef = null; pvLoaded = true;
+        updateBadge();
+        if (sectionVisible()) renderPanel();
+    });
+}
+function stopListening() {
+    if (pvRef) { pvRef.off(); pvRef = null; }
+    pvData = {}; pvErr = null; pvLoaded = false;
+}
+
+/* ---------- etykiety ---------- */
+const ACTS = {
+    verdict:             ["⚖️", "Rozpatruje sprawę {c}", "✍️", "Pisze werdykt — {c}"],
+    vote:                ["🗳", "Głosuje w sprawie {c}"],
+    incident_view:       ["🔎", "Przegląda zgłoszenie {c}"],
+    incident_edit:       ["✏️", "Edytuje zgłoszenie {c}"],
+    appeal_edit:         ["✏️", "Edytuje apelację {c}"],
+    appeal_verdict_edit: ["✏️", "Poprawia werdykt apelacji — {c}"],
+    bulletin:            ["📰", "Przygotowuje biuletyn sędziowski"],
+    log_verdict:         ["📜", "Ogląda werdykt z Dziennika Akcji"],
+    steward_chat:        ["💬", "Czat sędziowski — {c}", "💬", "Pisze na czacie — {c}", "Czat sędziowski (nie wybrano sprawy)"],
+    admin_list:          ["📋", "Panel — lista zgłoszeń i apelacji"],
+    report_form:         ["📝", "Na formularzu zgłoszenia", "📝", "Wypełnia zgłoszenie"],
+    report_preview:      ["📝", "Sprawdza zgłoszenie przed wysłaniem"],
+    appeal_form:         ["⚖️", "Na formularzu apelacji", "✍️", "Pisze apelację"],
+    history:             ["📂", "Przegląda historię zgłoszeń"],
+    player_chat:         ["💬", "Czat ze stewardami — {c}", "💬", "Pisze do stewardów — {c}"],
+    statement:           ["📝", "Oświadczenie w sprawie {c}", "✍️", "Pisze oświadczenie — {c}"],
+    trash:               ["🗑", "Kosz"],
+    stats:               ["📈", "Statystyki"],
+    users:               ["👥", "Użytkownicy i role"],
+    decisions:           ["📋", "Decyzje sędziowskie"],
+    content_editor:      ["✏️", "Edytor treści strony"],
+    presence:            ["👀", "Podgląd „Kto co robi”"]
+};
+const CASE_ACTS = new Set(["verdict", "vote", "incident_view", "incident_edit", "appeal_edit", "appeal_verdict_edit", "steward_chat"]);
+const caseKey = c => { const m = /[A-Z]{2,6}-\d+/i.exec(String(c || "")); return (m ? m[0] : String(c || "")).toUpperCase(); };
+
+function caseHtml(c) {
+    const incs = g("globalIncidents") || [];
+    const html = esc(c).replace(/[A-Z]{2,6}-\d+/gi, m => {
+        const r = incs.find(x => String(x.id).toUpperCase() === m.toUpperCase());
+        if (!r) return m;
+        const tip = `${r.nick || "?"} vs ${r.accusedNick || "?"}${r.track ? " · " + r.track : ""}${r.split ? " · " + r.split : ""}${r.status ? " · " + r.status : ""}`;
+        return `<button type="button" class="pv-case" data-pv-case="${esc(r.id)}" title="${esc(tip)} — kliknij, aby otworzyć">${m}</button>`;
+    });
+    return html;
+}
+// { ico, tpl (z ewentualnym {c}), c } — wspólne dla wersji HTML i tekstowej.
+function actParts(rec, noTyping) {
+    if (!rec || !rec.a) return { ico: "❔", tpl: "Brak danych" };
+    if (rec.a === "section") return { ico: "📄", tpl: rec.n || "Inna zakładka" };
+    const def = ACTS[rec.a];
+    if (!def) return { ico: "📄", tpl: String(rec.a) };
+    const typing = !noTyping && !!rec.t && !!def[2];
+    let tpl = typing ? def[3] : def[1];
+    const ico = typing ? def[2] : def[0];
+    if (!rec.c) tpl = (def[4] && !typing) ? def[4] : tpl.replace(/\s*—?\s*\{c\}/, "");
+    return { ico, tpl, c: rec.c || null, typing };
+}
+function actHtml(rec) {
+    const p = actParts(rec);
+    const text = esc(p.tpl).replace("{c}", p.c ? caseHtml(p.c) : "");
+    return `<span class="pv-ico">${p.ico}</span>${text}${rec && rec.t ? `<span class="pv-typing">● pisze…</span>` : ""}`;
+}
+function actText(rec, noTyping) {
+    const p = actParts(rec, noTyping);
+    return p.tpl.replace("{c}", p.c || "");
+}
+
+const lc1 = t => t ? t.charAt(0).toLowerCase() + t.slice(1) : t;
+function dur(ms) {
+    const m = Math.max(0, Math.floor(ms / 60000));
+    if (m < 1) return "mniej niż minutę";
+    if (m < 60) return `${m} min`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h} h${m % 60 ? " " + (m % 60) + " min" : ""}`;
+    const d = Math.floor(h / 24);
+    return `${d} ${d === 1 ? "dzień" : "dni"}`;
+}
+function when(ts) {
+    if (!ts) return "—";
+    const d = new Date(ts), t = new Date(now());
+    const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const day0 = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diff = Math.round((day0(t) - day0(d)) / 86400000);
+    if (diff === 0) return `dziś ${hm}`;
+    if (diff === 1) return `wczoraj ${hm}`;
+    return typeof formatTimestamp === "function" ? formatTimestamp(ts) : d.toLocaleString("pl-PL");
+}
+
+/* ---------- składanie danych ---------- */
+const ST_ORDER = { active: 0, idle: 1, away: 2 };
+function liveSessions(p) {
+    const t = now();
+    return Object.entries((p && p.sessions) || {})
+        .map(([sid, v]) => Object.assign({ sid }, v || {}))
+        .filter(v => Number(v.lastSeen) > t - STALE_MS);
+}
+function people() {
+    const stewards = g("globalStewards") || [];
+    const byId = new Map(stewards.map(s => [String(s.id), s]));
+    const out = new Map();
+    Object.entries(pvData || {}).forEach(([uid, p]) => {
+        if (!p || typeof p !== "object") return;
+        const live = liveSessions(p).sort((a, b) => (ST_ORDER[a.st] ?? 3) - (ST_ORDER[b.st] ?? 3) || Number(b.lastSeen) - Number(a.lastSeen));
+        const st = byId.get(uid);
+        const claimedTeam = p.kind === "team";
+        out.set(uid, {
+            uid,
+            nick: st ? st.nick : (p.nick || uid),
+            role: st ? st.role : (p.role || ""),
+            team: !!st || claimedTeam,
+            verified: !!st,
+            judge: !!p.judge,
+            live, best: live[0] || null,
+            lastSeen: Number(p.lastSeen) || (live[0] ? Number(live[0].lastSeen) : 0),
+            last: p.last || null
+        });
+    });
+    stewards.forEach(s => {
+        const uid = String(s.id);
+        if (!out.has(uid)) out.set(uid, { uid, nick: s.nick, role: s.role, team: true, verified: true, live: [], best: null, lastSeen: 0, last: null });
+    });
+    return [...out.values()];
+}
+function sortPeople(list) {
+    return list.sort((a, b) => {
+        const oa = a.best ? ST_ORDER[a.best.st] ?? 3 : 9, ob = b.best ? ST_ORDER[b.best.st] ?? 3 : 9;
+        if (oa !== ob) return oa - ob;
+        if (a.best && b.best) return Number(a.best.since || 0) - Number(b.best.since || 0);
+        return (b.lastSeen || 0) - (a.lastSeen || 0) || String(a.nick).localeCompare(String(b.nick), "pl");
+    });
+}
+function lastActionOf(person) {
+    const logs = g("globalLogs") || [];
+    return logs.find(l => (l.uid && String(l.uid) === person.uid) || (!l.uid && l.steward && l.steward === person.nick)) || null;
+}
+function openAssigned(uid) {
+    return (g("globalIncidents") || []).filter(r => r.assignedTo && String(r.assignedTo.id) === uid && (r.status === "Oczekuje" || r.status === "W apelacji"));
+}
+function clashes(team) {
+    const map = new Map();
+    team.forEach(p => {
+        if (!p.best || !CASE_ACTS.has(p.best.a) || !p.best.c) return;
+        const k = caseKey(p.best.c);
+        if (!map.has(k)) map.set(k, []);
+        map.get(k).push(p);
+    });
+    return [...map.entries()].filter(([, l]) => l.length > 1);
+}
+
+/* ---------- render ---------- */
+const STATE_TXT = { active: "aktywny", idle: "bezczynny", away: "karta w tle" };
+function stateMeta(best) {
+    if (!best || best.st === "active") return "";
+    const t = now() - Number(best.stSince || best.since || now());
+    return ` · <span class="warn">${best.st === "idle" ? "🟡 bezczynny" : "⚪ karta w tle"} od ${dur(t)}</span>`;
+}
+function rulesBox(kind) {
+    const snippet = `"presence": {
+  ".read": "auth != null && (root.child('stewards').child(auth.uid).exists() || auth.token.owner === true)",
+  "$uid": {
+    ".read": "auth != null && auth.uid === $uid",
+    ".write": "auth != null && auth.uid === $uid"
+  }
+}`;
+    return `<div class="pv-rules">
+      <h3>${kind === "read" ? "🔒 Baza nie pozwala odczytać obecności" : "🔒 Baza nie pozwala zapisywać obecności"}</h3>
+      Podgląd potrzebuje nowego węzła <b>presence</b> w bazie, a reguły bazy jeszcze go nie znają. Dopisz poniższy fragment w Firebase Console → Realtime Database → <b>Reguły</b> (albo w pliku <b>database.rules.json</b>) wewnątrz <b>"rules": { … }</b>, obok pozostałych węzłów, i kliknij „Opublikuj”. Każdy zalogowany może wtedy zapisywać tylko swoją obecność, a czytać całość mogą tylko stewardzi i właściciele ligi.
+      <pre id="pvRulesSnippet">${esc(snippet)}</pre>
+      <button type="button" class="btn-secondary" data-pv-copy>📋 Kopiuj regułę</button>
+      <span style="margin-left:8px; color:var(--text-dim); font-size:11px;">Po opublikowaniu odśwież stronę.</span>
+    </div>`;
+}
+
+function teamCard(p, me, clashSet) {
+    const b = p.best;
+    const cls = b ? "st-" + (b.st || "active") : "st-off";
+    const roleTxt = p.verified ? (p.role || "Steward") : (p.judge ? "Sędzia spoza ligi" : (p.role || "Zespół"));
+    const roleTip = p.verified ? "" : ` title="Tego konta nie ma na liście stewardów — to sędzia spoza ligi albo właściciel ligi (dane podane przez samo konto)."`;
+    let html = `<div class="pv-card ${cls}${b && clashSet.has(p.uid) ? " pv-clash" : ""}">
+      <div class="pv-top"><span class="pv-dot"></span><span class="pv-nick">${esc(p.nick)}</span><span class="pv-role${p.verified ? "" : " unverified"}"${roleTip}>${esc(roleTxt)}</span>${p.uid === me ? `<span class="pv-you">TY</span>` : ""}</div>`;
+    if (b) {
+        html += `<div class="pv-act">${actHtml(b)}</div>`;
+        html += `<div class="pv-meta">od ${dur(now() - Number(b.since || now()))} · ${b.dev === "m" ? "📱 telefon" : "💻 komputer"}${p.live.length > 1 ? ` · ${p.live.length} karty` : ""}${stateMeta(b)}</div>`;
+        if (p.live.length > 1) {
+            const others = p.live.slice(1).map(s => actText(s, true));
+            html += `<div class="pv-meta">Inne karty: ${others.map(t => esc(short(t, 60))).join(" · ")}</div>`;
+        }
+    } else {
+        const lastTxt = p.last ? actText(p.last, true) : "";
+        html += `<div class="pv-act" style="color:var(--text-dim);">Offline${p.lastSeen ? ` · ostatnio ${esc(when(p.lastSeen))}` : " · nie był na stronie od włączenia podglądu"}</div>`;
+        if (lastTxt) html += `<div class="pv-meta">Ostatnio: ${esc(lastTxt)}</div>`;
+    }
+    const asg = openAssigned(p.uid);
+    if (asg.length) html += `<div class="pv-meta">📌 Przejęte sprawy w toku: ${asg.slice(0, 6).map(r => caseHtml(r.id)).join(", ")}${asg.length > 6 ? ` i ${asg.length - 6} więcej` : ""}</div>`;
+    const la = lastActionOf(p);
+    if (la) html += `<div class="pv-last">Ostatnia akcja: <b style="color:var(--text);">${esc(when(la.timestamp))}</b> · ${esc(la.category || "")}${/[A-Z]{2,6}-\d+/i.test(String(la.targetId || "")) ? " · " + caseHtml(la.targetId) : ""} — ${esc(short(la.details || "", 110))}</div>`;
+    return html + `</div>`;
+}
+
+function driverRow(p, me) {
+    const b = p.best;
+    return `<div class="pv-row st-${esc(b.st || "active")}">
+      <span class="pv-dot"></span>
+      <span class="pv-nick" title="Discord ID: ${esc(p.uid)}">${esc(p.nick)}</span>${p.uid === me ? `<span class="pv-you">TY</span>` : ""}
+      <span class="pv-act">${actHtml(b)}</span>
+      <span class="pv-meta">od ${dur(now() - Number(b.since || now()))} · ${b.dev === "m" ? "📱" : "💻"}${p.live.length > 1 ? ` · ${p.live.length} karty` : ""}${stateMeta(b)}</span>
+    </div>`;
+}
+
+function renderPanel() {
+    const body = $("pvBody");
+    if (!body) return;
+    const live = $("pvLive");
+    const me = typeof currentUid === "function" ? currentUid() : null;
+
+    if (pvErr) {
+        if (live) { live.textContent = "● brak dostępu"; live.className = "pv-live off"; }
+        body.innerHTML = rulesBox("read");
+        $("pvCntTeam").textContent = ""; $("pvCntDrivers").textContent = "";
+        return;
+    }
+    if (!pvLoaded) {
+        if (live) { live.textContent = "● łączenie…"; live.className = "pv-live off"; }
+        body.innerHTML = `<div class="pv-empty">Wczytywanie…</div>`;
+        return;
+    }
+    if (live) { live.textContent = "● na żywo"; live.className = "pv-live"; }
+
+    const all = people();
+    const team = sortPeople(all.filter(p => p.team));
+    const drivers = sortPeople(all.filter(p => !p.team && p.best));
+    const teamOn = team.filter(p => p.best);
+    $("pvCntTeam").textContent = ` · ${teamOn.length} online`;
+    $("pvCntDrivers").textContent = ` · ${drivers.length}`;
+
+    let html = window.rzPresenceDenied ? rulesBox("write") : "";
+
+    if (pvTab === "team") {
+        const cnt = st => teamOn.filter(p => p.best.st === st).length;
+        const working = teamOn.filter(p => p.best && CASE_ACTS.has(p.best.a) && p.best.c).length;
+        html += `<div class="pv-summary">
+          <span class="pv-pill">🟢 aktywni: <b>${cnt("active")}</b></span>
+          <span class="pv-pill">🟡 bezczynni: <b>${cnt("idle")}</b></span>
+          <span class="pv-pill">⚪ karta w tle: <b>${cnt("away")}</b></span>
+          <span class="pv-pill">⚖️ przy sprawach: <b>${working}</b></span>
+          <span class="pv-pill">🏁 kierowcy online: <b>${drivers.length}</b></span>
+        </div>`;
+        const cl = clashes(teamOn);
+        const clashSet = new Set();
+        cl.forEach(([k, list]) => {
+            list.forEach(p => clashSet.add(p.uid));
+            html += `<div class="pv-warn">⚠️ Nad sprawą <b>${caseHtml(k)}</b> pracuje teraz kilka osób: ${list.map(p => `<b>${esc(p.nick)}</b> (${esc(lc1(actText(p.best)))})`).join(", ")}. Warto się dogadać, żeby nie wydać dwóch werdyktów.</div>`;
+        });
+        html += `<div class="pv-h">Na stronie teraz (${teamOn.length})</div>`;
+        html += teamOn.length ? `<div class="pv-grid">${teamOn.map(p => teamCard(p, me, clashSet)).join("")}</div>` : `<div class="pv-empty">Nikogo z zespołu nie ma teraz na stronie.</div>`;
+        const off = team.filter(p => !p.best);
+        if (off.length) html += `<div class="pv-h">Offline (${off.length})</div><div class="pv-grid">${off.map(p => teamCard(p, me, clashSet)).join("")}</div>`;
+    } else {
+        html += `<div class="pv-h">Kierowcy na stronie (${drivers.length})</div>`;
+        html += drivers.length ? `<div class="pv-list">${drivers.map(p => driverRow(p, me)).join("")}</div>` : `<div class="pv-empty">Żaden kierowca nie jest teraz na stronie.</div>`;
+    }
+    body.innerHTML = html;
+}
+
+function updateBadge() {
+    const badge = $("pvBadge");
+    if (!badge) return;
+    const me = typeof currentUid === "function" ? currentUid() : null;
+    const n = pvErr ? 0 : people().filter(p => p.team && p.best && p.uid !== me).length;
+    badge.textContent = String(n);
+    badge.style.display = n > 0 ? "inline-block" : "none";
+    const btn = $("presenceMenuBtn");
+    if (btn) btn.title = n ? `Inni z zespołu na stronie: ${n}` : "Nikogo innego z zespołu nie ma teraz na stronie";
+}
+
+setInterval(() => {
+    if (!pvRef) return;
+    updateBadge();
+    if (sectionVisible()) renderPanel();
+}, 15000);
+
+/* ---------- dostęp ---------- */
+function refreshAccess() {
+    const ok = canView();
+    const btn = $("presenceMenuBtn");
+    if (btn) btn.style.display = ok ? "block" : "none";
+    if (ok) startListening();
+    else {
+        stopListening();
+        updateBadge();
+        if (sectionVisible()) showSection("formSection");
+    }
+}
+wrap("applyStewardPermissions", refreshAccess);
+wrap("adminLogout", () => { refreshAccess(); tick(true); });
+refreshAccess();
+
+window.rzPresence = { detect, tick, renderPanel, people };
 })();
 </script>
 
