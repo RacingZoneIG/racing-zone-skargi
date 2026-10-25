@@ -3549,22 +3549,8 @@
         </div>
       </div>
 
-      <div id="manualUnlockBox" class="stats-group-box" style="display:none; border-color: var(--blue); margin-bottom: 14px;">
-        <div class="stats-group-title" style="color:#60a5fa;">🔓 Ręczna blokada zgłoszeń (data/godzina)</div>
-        <p style="font-size:11px; color:var(--text-dim); margin:0 0 10px; line-height:1.5;">Gdy włączona, nadpisuje automatyczny harmonogram splitów: cała strona pozostaje zablokowana aż do podanej daty i godziny, po czym odblokowuje się automatycznie.</p>
-        <div style="display:flex; flex-wrap:wrap; align-items:flex-end; gap:14px;">
-          <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-dim); cursor:pointer;">
-            <input type="checkbox" id="manualUnlockEnabled" onchange="toggleManualUnlockInput()" style="width:16px; height:16px; cursor:pointer;">
-            Włącz ręczną blokadę
-          </label>
-          <div>
-            <label style="display:block; font-size:11px; color:var(--text-dim); margin-bottom:4px;">Odblokuj od:</label>
-            <input type="datetime-local" id="manualUnlockAt" disabled style="background:var(--bg-input); border:1px solid var(--border); color:var(--text); padding:6px 10px; border-radius:2px; font-size:12px;">
-          </div>
-          <button type="button" class="btn-secondary" style="padding:7px 16px; font-size:11px;" onclick="saveManualUnlockSettings()">💾 ZAPISZ BLOKADĘ</button>
-        </div>
-        <div id="manualUnlockStatus" style="margin-top:10px; font-size:11px; color:var(--text-dim);"></div>
-      </div>
+      <!-- Punkt zaczepienia dla boxów ustawień wstawianych skryptem (harmonogram, ogłoszenia, głosowanie, kalendarz) -->
+      <div id="adminSettingsAnchor" style="display:none;"></div>
 
       <div id="adminSplitTabs" class="split-tabs">
         <button type="button" class="split-tab-btn active" data-split="ALL" onclick="setAdminSplitTab('ALL')" data-key="splitTabAll">Wszystkie</button>
@@ -4760,28 +4746,14 @@ function reportWindowMs(split) {
     return (isFinite(h) && h > 0 ? Math.min(h, 168) : 24) * 60 * 60 * 1000;
 }
 
-// === RĘCZNA BLOKADA CAŁEJ STRONY USTAWIANA W PANELU ADMINA (Firebase — dotyczy
-// WSZYSTKICH użytkowników na każdym urządzeniu). Gdy enabled === true, NADPISUJE
-// automatyczny harmonogram REPORT_WINDOWS: strona jest zablokowana aż do chwili
-// unlockAt, a po jej upłynięciu zostaje odblokowana (aż admin zmieni/wyłączy blokadę).
-let manualUnlockSettings = { enabled: false, unlockAt: null };
-
-// true = ręczna blokada jest włączona i data odblokowania jeszcze nie nadeszła
-function isManualLockActive() {
-    return manualUnlockSettings.enabled && !!manualUnlockSettings.unlockAt && Date.now() < manualUnlockSettings.unlockAt;
-}
-
-// Blokada (ręczna z panelu ORAZ nakładka na całą stronę) dotyczy tylko kierowców i zwykłych
+// Blokada (nakładka na całą stronę) dotyczy tylko kierowców i zwykłych
 // stewardów. Główny Steward / ROOT zawsze mają dostęp — ustawiane w applyStewardPermissions(),
 // tam gdzie decyduje się, co dany steward może robić. Harmonogram okna zgłoszeniowego per split
 // (REPORT_WINDOWS / isReportWindowOpenForSplit) NIE jest tym dotknięty i działa jak dotychczas.
 let stewardLockBypass = false;
 
-// Tekst najbliższego/wymaganego momentu otwarcia, z uwzględnieniem ręcznej blokady.
+// Tekst najbliższego momentu otwarcia okna zgłoszeń dla danego splitu.
 function getNextOpenText(split) {
-    if (manualUnlockSettings.enabled) {
-        return manualUnlockSettings.unlockAt ? formatTimestamp(manualUnlockSettings.unlockAt) : "-";
-    }
     const nextOpen = findNextReportWindowStart(split);
     return nextOpen ? formatTimestamp(nextOpen.getTime()) : (currentLang === 'pl' ? "termin nie został jeszcze ustalony" : "not scheduled yet");
 }
@@ -4850,7 +4822,7 @@ function updateAdminSplitTabsLock() {
     if (!container) return;
     // Główny Steward / ROOT (oraz steward z uprawnieniem no_lock_restrictions) omijają blokadę
     // zakładek Split 1 / Split 2 — dla nich zakładki są zawsze odblokowane, niezależnie od
-    // harmonogramu/ręcznej blokady okna zgłoszeniowego. Patrz applyStewardPermissions().
+    // harmonogramu okna zgłoszeniowego. Patrz applyStewardPermissions().
     ["Split 1", "Split 2"].forEach(split => {
         const open = stewardLockBypass || isReportWindowOpenForSplit(split);
         const btn = container.querySelector(`.split-tab-btn[data-split="${split}"]`);
@@ -4874,11 +4846,6 @@ function updateAdminSplitTabsLock() {
 
 // Nieznany/pusty split nie jest blokowany (żeby nie zepsuć np. starych zgłoszeń bez tego pola).
 function isReportWindowOpenForSplit(split) {
-    // Ręczna blokada ustawiona w panelu admina ma pierwszeństwo nad harmonogramem splitów.
-    if (manualUnlockSettings.enabled) {
-        if (!manualUnlockSettings.unlockAt) return false; // włączona, ale bez ustawionej daty = zablokowane
-        return Date.now() >= manualUnlockSettings.unlockAt;
-    }
     if (!REPORT_WINDOWS[split]) return true;
     const lastStart = findLastReportWindowStart(split);
     if (!lastStart) return false;
@@ -4928,13 +4895,9 @@ function updateSiteReportWindowLock() {
 
     const nextOpenText = getNextOpenText(split);
     if (textEl) {
-        textEl.textContent = manualUnlockSettings.enabled
-            ? (currentLang === 'pl'
-                ? `Cały panel jest zablokowany do czasu ustalonego przez administrację. Odblokowanie: ${nextOpenText}.`
-                : `The whole panel is locked until the time set by the administration. Unlocks: ${nextOpenText}.`)
-            : (currentLang === 'pl'
-                ? `Cały panel jest dostępny wyłącznie w oknie przyjmowania zgłoszeń dla ${split}. Najbliższe otwarcie: ${nextOpenText}.`
-                : `The whole panel is only available during the report submission window for ${split}. Next opening: ${nextOpenText}.`);
+        textEl.textContent = currentLang === 'pl'
+            ? `Cały panel jest dostępny wyłącznie w oknie przyjmowania zgłoszeń dla ${split}. Najbliższe otwarcie: ${nextOpenText}.`
+            : `The whole panel is only available during the report submission window for ${split}. Next opening: ${nextOpenText}.`;
     }
     overlay.style.display = "flex";
 }
@@ -5068,6 +5031,33 @@ function canOpenTrash() {
 
 let isAdminAuthenticated = false;
 let discordDriverAuth = null; // { id, username, globalName, avatarUrl } — kierowca zalogowany przez Discord
+
+// Domyślny awatar Discorda (konto bez własnego zdjęcia) — tak samo jak liczy go Discord:
+// nowe nazwy użytkownika → (id >> 22) % 6, stare konta z #1234 → discriminator % 5.
+function discordDefaultAvatar(id, discriminator) {
+    let n = 0;
+    try {
+        const disc = Number(discriminator || 0);
+        n = disc > 0 ? disc % 5 : Number((BigInt(String(id)) >> 22n) % 6n);
+    } catch (e) { n = 0; }
+    return `https://cdn.discordapp.com/embed/avatars/${n}.png`;
+}
+// Awatar z ostatniego logowania przez Discord (kierowca ALBO panel stewarda) — używa go m.in. zakładka „Na żywo”.
+function rememberDiscordAvatar(id, url) {
+    try { localStorage.setItem("discordAvatar", JSON.stringify({ id: String(id), url: String(url || "") })); } catch (e) {}
+}
+// Najlepszy znany awatar dla danego Discord ID: z logowania kierowcy, z logowania do panelu, a w ostateczności domyślny.
+function knownDiscordAvatar(id) {
+    id = String(id || "");
+    if (!/^\d{5,25}$/.test(id)) return "";
+    const real = u => /^https:\/\/cdn\.discordapp\.com\/avatars\//.test(String(u || ""));
+    if (discordDriverAuth && String(discordDriverAuth.id) === id && real(discordDriverAuth.avatarUrl)) return String(discordDriverAuth.avatarUrl);
+    try {
+        const s = JSON.parse(localStorage.getItem("discordAvatar") || "null");
+        if (s && String(s.id) === id && real(s.url)) return String(s.url);
+    } catch (e) {}
+    return discordDefaultAvatar(id);
+}
 let currentLang = 'pl';
 let currentlyEditedReportId = null;
 let isUsersAuth = false;
@@ -5515,77 +5505,6 @@ function listenToAppearanceSettings() {
     });
 }
 
-/* === RĘCZNA BLOKADA STRONY (data/godzina) — synchronizacja z Firebase, dotyczy WSZYSTKICH === */
-function listenToManualUnlockSettings() {
-    database.ref("settings/reportWindow").on("value", snap => {
-        const data = snap.val() || {};
-        manualUnlockSettings.enabled = !!data.enabled;
-        manualUnlockSettings.unlockAt = data.unlockAt || null;
-        renderManualUnlockAdminBox();
-        updateSiteReportWindowLock();
-        updateReportWindowUI();
-    });
-}
-
-function renderManualUnlockAdminBox() {
-    const cb = document.getElementById("manualUnlockEnabled");
-    const dt = document.getElementById("manualUnlockAt");
-    const status = document.getElementById("manualUnlockStatus");
-    if (!cb || !dt || !status) return;
-
-    cb.checked = manualUnlockSettings.enabled;
-    dt.disabled = !manualUnlockSettings.enabled;
-
-    // Nie nadpisuj pola, jeśli admin właśnie w nim edytuje wartość.
-    if (manualUnlockSettings.unlockAt && document.activeElement !== dt) {
-        const d = new Date(manualUnlockSettings.unlockAt);
-        const pad = n => String(n).padStart(2, "0");
-        dt.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    } else if (!manualUnlockSettings.unlockAt) {
-        dt.value = "";
-    }
-
-    if (!manualUnlockSettings.enabled) {
-        status.textContent = "Wyłączona — obowiązuje automatyczny harmonogram splitów.";
-    } else if (!manualUnlockSettings.unlockAt) {
-        status.textContent = "🔒 Aktywna — brak ustawionej daty odblokowania, strona jest zablokowana.";
-    } else if (isManualLockActive()) {
-        status.textContent = "🔒 Aktywna — strona zablokowana do " + formatTimestamp(manualUnlockSettings.unlockAt) + ".";
-    } else {
-        status.textContent = "🟢 Aktywna — strona odblokowana od " + formatTimestamp(manualUnlockSettings.unlockAt) + ".";
-    }
-}
-
-function toggleManualUnlockInput() {
-    const cb = document.getElementById("manualUnlockEnabled");
-    const dt = document.getElementById("manualUnlockAt");
-    if (cb && dt) dt.disabled = !cb.checked;
-}
-
-function saveManualUnlockSettings() {
-    const cb = document.getElementById("manualUnlockEnabled");
-    const dt = document.getElementById("manualUnlockAt");
-    if (!cb || !dt) return;
-
-    const enabled = cb.checked;
-    let unlockAt = null;
-    if (enabled) {
-        if (!dt.value) {
-            showToast("Błąd", "Ustaw datę i godzinę odblokowania.");
-            return;
-        }
-        unlockAt = new Date(dt.value).getTime();
-        if (isNaN(unlockAt)) {
-            showToast("Błąd", "Nieprawidłowa data lub godzina.");
-            return;
-        }
-    }
-
-    database.ref("settings/reportWindow").set({ enabled, unlockAt })
-        .then(() => showToast("Zapisano", "Ustawienia ręcznej blokady zostały zaktualizowane."))
-        .catch(err => showToast("Błąd zapisu", err.message));
-}
-
 /* === WYBÓR CZCIONKI STRONY === */
 const FONT_PRESETS = {
     default: { heading: "'Barlow Condensed', sans-serif", body: "'Barlow', sans-serif" },
@@ -6005,7 +5924,9 @@ async function handleDiscordOAuthRedirect() {
                 const user = await signInWithDiscordAccessToken(accessToken);
                 const avatarUrl = user.avatar
                     ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64`
-                    : `https://cdn.discordapp.com/embed/avatars/${Number(BigInt(user.discriminator || "0") % 5n)}.png`;
+                    : discordDefaultAvatar(user.id, user.discriminator);
+                // Zapamiętujemy awatar przy każdym logowaniu (także do panelu stewarda) — dla zakładki „Na żywo”.
+                rememberDiscordAvatar(user.id, avatarUrl);
 
                 if (uidBefore !== String(user.id)) {
                     // Nowa sesja: dane strony były wczytane bez logowania (albo innym kontem) —
@@ -6152,13 +6073,9 @@ function updateReportWindowUI() {
         notice.textContent = "";
     } else {
         const nextOpenText = getNextOpenText(split);
-        notice.textContent = manualUnlockSettings.enabled
-            ? (currentLang === 'pl'
-                ? `Zgłoszenia są teraz zamknięte (blokada ustawiona przez administrację). Otwarcie: ${nextOpenText}.`
-                : `Reports are currently closed (locked by the administration). Opens: ${nextOpenText}.`)
-            : (currentLang === 'pl'
-                ? `Zgłoszenia dla ${split} są teraz zamknięte. Otwarcie: ${nextOpenText}.`
-                : `Reports for ${split} are currently closed. Opens: ${nextOpenText}.`);
+        notice.textContent = currentLang === 'pl'
+            ? `Zgłoszenia dla ${split} są teraz zamknięte. Otwarcie: ${nextOpenText}.`
+            : `Reports for ${split} are currently closed. Opens: ${nextOpenText}.`;
         notice.style.display = "block";
     }
     if (submitBtn && !open) submitBtn.disabled = true;
@@ -6520,7 +6437,7 @@ function applyStewardPermissions() {
     // uprawnień w bazie — tak samo jak przy przyciskach usuwania w tabeli zgłoszeń.
     const isRoot = loggedInSteward?.role === "Główny Steward" || loggedInSteward?.role === "ROOT";
 
-    // Blokada strony (ręczna z panelu / nakładka) obowiązuje tylko kierowców i zwykłych
+    // Blokada strony (nakładka) obowiązuje tylko kierowców i zwykłych
     // stewardów — Główny Steward / ROOT ma zawsze dostęp, podobnie jak steward z dedykowanym
     // uprawnieniem "Nie blokuj niczego" (no_lock_restrictions / NOBLOCK), które w pełni pomija
     // wszystkie blokady strony (nakładkę blokady oraz zakładki Split 1 / Split 2 w panelu
@@ -6547,14 +6464,6 @@ function applyStewardPermissions() {
     // Personalizacja strony (czcionka, wygląd, tło, język) — tylko Główny Steward / ROOT.
     const appearanceControls = document.getElementById("appearanceControls");
     if (appearanceControls) appearanceControls.style.display = isRoot ? "flex" : "none";
-
-    // Ręczna blokada strony (data/godzina) — dostępna dla Głównego Stewarda / ROOT oraz
-    // stewardów z uprawnieniem manage_settings (tak samo jak inne ustawienia systemowe).
-    const manualUnlockBox = document.getElementById("manualUnlockBox");
-    if (manualUnlockBox) {
-        manualUnlockBox.style.display = (isRoot || perms.manage_settings) ? "block" : "none";
-        if (manualUnlockBox.style.display === "block") renderManualUnlockAdminBox();
-    }
 }
 
 document.getElementById("complaintForm").addEventListener("submit", async e => {
@@ -10793,10 +10702,6 @@ window.addEventListener("DOMContentLoaded", () => {
     // dla WSZYSTKICH odwiedzających, na każdym urządzeniu, i nadpisują wersję lokalną.
     listenToAppearanceSettings();
 
-    // Ręczna blokada strony (data/godzina), ustawiana w panelu admina — dotyczy WSZYSTKICH
-    // odwiedzających i nadpisuje automatyczny harmonogram splitów, gdy jest włączona.
-    listenToManualUnlockSettings();
-
     // Obsługa logowania przez Discord (OAuth2) — po powrocie z Discorda wymienia token na sesję
     // Firebase (przez Workera), albo wczytuje zapisaną wcześniej sesję kierowcy.
     const discordOAuthReturn = !!(window.location.hash && window.location.hash.includes("access_token"));
@@ -11904,7 +11809,7 @@ const ANN_ICONS = { info: "ℹ️", warn: "⚠️", crit: "⛔" };
 const menuEl = document.querySelector(".card .menu");
 if (menuEl) menuEl.insertAdjacentHTML("beforebegin",
     `<div id="announcementBanner" class="ann-banner" role="status"><span class="ann-icon"></span><div class="ann-body"></div><button type="button" class="ann-close" title="Ukryj to ogłoszenie">✕</button></div>`);
-const unlockBox = $("manualUnlockBox");
+const unlockBox = $("adminSettingsAnchor");
 if (unlockBox) unlockBox.insertAdjacentHTML("afterend", `
   <div id="announcementAdminBox" class="stats-group-box" style="display:none; border-color: var(--gold-dim); margin-bottom: 14px;">
     <div class="stats-group-title" style="color:var(--amber-text);">📢 Ogłoszenie dla wszystkich (baner na górze strony)</div>
@@ -11990,10 +11895,7 @@ function updateReportCountdown() {
     if (!el || !splitEl) return;
     const split = splitEl.value;
     let text = "", cls = "rw-countdown";
-    if (manualUnlockSettings.enabled) {
-        if (isManualLockActive()) text = `⏳ ${L("Odblokowanie za", "Unlocks in")} ${fmtLeft(manualUnlockSettings.unlockAt - Date.now())}`;
-        else if (manualUnlockSettings.unlockAt) { text = `🟢 ${L("Zgłoszenia otwarte", "Reports open")}`; cls += " open"; }
-    } else if (REPORT_WINDOWS[split]) {
+    if (REPORT_WINDOWS[split]) {
         if (isReportWindowOpenForSplit(split)) {
             const start = findLastReportWindowStart(split);
             const left = start ? start.getTime() + reportWindowMs(split) - Date.now() : 0;
@@ -12741,7 +12643,7 @@ const shortTrack = t => { const s = String(t || ""), m = s.match(/\(([^)]+)\)\s*
    1. ZASADY GŁOSOWANIA: TRYB TAJNY + KWORUM
    ============================================================ */
 window.fiaVotingSettings = { mode: "open", quorum: 0 };
-const annBox = $("announcementAdminBox") || $("manualUnlockBox");
+const annBox = $("announcementAdminBox") || $("adminSettingsAnchor");
 if (annBox) annBox.insertAdjacentHTML("afterend", `
   <div id="votingRulesBox" class="stats-group-box" style="display:none; border-color: rgba(168,85,247,0.5); margin-bottom: 14px;">
     <div class="stats-group-title" style="color:var(--purple-text);">🗳 Zasady głosowania sędziów</div>
@@ -13487,7 +13389,7 @@ window.fiaAutoSelectRoundTrack = () => autoSelectRoundTrack();
 
 const formTitle = document.querySelector("#formSection .section-title");
 if (formTitle) formTitle.insertAdjacentHTML("afterend", `<div id="roundInfoBar" class="round-bar"></div>`);
-const votingBox = $("votingRulesBox") || $("announcementAdminBox") || $("manualUnlockBox");
+const votingBox = $("votingRulesBox") || $("announcementAdminBox") || $("adminSettingsAnchor");
 if (votingBox) votingBox.insertAdjacentHTML("afterend", `
   <div id="calendarAdminBox" class="stats-group-box" style="display:none; border-color: var(--gold-dim); margin-bottom:14px;">
     <div class="stats-group-title" style="color:var(--gold);">📅 Kalendarz sezonu</div>
@@ -15295,11 +15197,11 @@ const EVIDENCE_NODE = typeof EVIDENCE_DB_NODE !== "undefined" ? EVIDENCE_DB_NODE
 const DB_NAMES = {
     incidents: "Zgłoszenia", appeals: "Apelacje", stewards: "Stewardzi", settings: "Ustawienia",
     action_logs: "Dziennik akcji", deleted_action_logs: "Archiwum usuniętych logów", trash: "Kosz",
-    verdictTemplates: "Szablony werdyktów", calls: "Dawne rozmowy głosowe (do usunięcia)", voiceMembers: "Dawne kanały głosowe — obecni (do usunięcia)",
+    verdictTemplates: "Szablony werdyktów", calls: "Dawne rozmowy głosowe (do usunięcia)", voiceMembers: "Dawne kanały głosowe + zapasowy węzeł podglądu „Na żywo” (_presence)",
     voiceSignals: "Dawne kanały głosowe — sygnalizacja (do usunięcia)", incident_counter: "Licznik numerów zgłoszeń",
     appeal_counter: "Licznik numerów apelacji", counters: "Liczniki", chat: "Czat", chats: "Czaty",
     textOverrides: "Zmienione teksty strony", appearance: "Wygląd", announcement: "Ogłoszenie",
-    reportWindow: "Ręczna blokada zgłoszeń", reportSchedule: "Harmonogram otwierania zgłoszeń", season: "Sezon", calendar: "Kalendarz", suspensions: "Zawieszenia",
+    presence: "Podgląd „Na żywo” — kto co robi", reportWindow: "Dawna ręczna blokada zgłoszeń (nieużywane — do usunięcia)", reportSchedule: "Harmonogram otwierania zgłoszeń", season: "Sezon", calendar: "Kalendarz", suspensions: "Zawieszenia",
     voting: "Głosowanie", bulletin: "Biuletyn", permissions: "Uprawnienia", statements: "Oświadczenia stron",
     customFields: "Rubryki formularzy / dodatkowe rubryki"
 };
@@ -15801,7 +15703,6 @@ database.ref(TE_PATH).on("value", snap => {
 #reportScheduleBox .rs-preview b { color: var(--text); font-weight: 600; }
 #reportScheduleBox .rs-foot { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
 #reportScheduleBox .rs-foot button { margin: 0; padding: 7px 16px; font-size: 11px; }
-#reportScheduleBox .rs-warn { display: none; margin: 0 0 10px; padding: 8px 10px; font-size: 11px; line-height: 1.5; color: var(--amber-text); border: 1px solid var(--amber-text); border-radius: 3px; }
 @media (max-width: 760px) { #reportScheduleBox .rs-grid { grid-template-columns: 1fr; } }
 </style>
 
@@ -15875,7 +15776,7 @@ try {
 } catch (e) {}
 
 /* ---------- panel administratora ---------- */
-const anchor = $("manualUnlockBox");
+const anchor = $("adminSettingsAnchor");
 const cardHtml = split => {
     const id = idOf(split);
     return `<div class="rs-card" data-split="${esc(split)}">
@@ -15902,7 +15803,6 @@ const boxHtml = `
 <div id="reportScheduleBox" class="stats-group-box" style="display:none; border-color: var(--gold); margin-bottom: 14px;">
   <div class="stats-group-title" style="color:var(--gold);">🗓 Harmonogram otwierania zgłoszeń</div>
   <p style="font-size:11px; color:var(--text-dim); margin:0 0 10px; line-height:1.5;">Wpisz, kiedy otwierają się zgłoszenia dla każdego splitu: co tydzień (dzień i godzina) albo na konkretny termin. Poza tym oknem formularz zgłoszeń dla danego splitu jest zamknięty. Zmiana obowiązuje wszystkich od razu po zapisaniu.</p>
-  <p class="rs-warn" id="rsManualWarn">⚠️ Włączona jest „Ręczna blokada zgłoszeń” — dopóki jest aktywna, nadpisuje ten harmonogram dla obu splitów.</p>
   <div class="rs-grid">${SPLITS.map(cardHtml).join("")}</div>
   <div class="rs-foot">
     <button type="button" class="btn-success" id="rsSaveBtn">💾 Zapisz harmonogram</button>
@@ -15974,7 +15874,6 @@ function windowFor(cfg) {
 
 function renderPreview() {
     if (!$("reportScheduleBox")) return;
-    $("rsManualWarn").style.display = manualUnlockSettings && manualUnlockSettings.enabled ? "block" : "none";
     SPLITS.forEach(split => {
         const id = idOf(split);
         const modeEl = document.querySelector(`input[name="rsMode${id}"]:checked`);
@@ -15997,7 +15896,7 @@ function renderPreview() {
             else when = `Najbliższe otwarcie: <b>${esc(fmt(w.start))}</b> · zamknięcie: <b>${esc(fmt(w.end))}</b>.`;
             prev.innerHTML = `${rule} · przez ${esc(c.hours)} ${c.hours === 1 ? "godzinę" : "godz."}<br>${when}`;
         }
-        // Stan na żywo (zapisany harmonogram, z uwzględnieniem ręcznej blokady)
+        // Stan na żywo (zapisany harmonogram)
         const badge = $("rsBadge" + id), open = isReportWindowOpenForSplit(split);
         badge.className = "rs-badge " + (open ? "open" : "closed");
         badge.textContent = open ? "🟢 Teraz otwarte" : "🔒 Teraz zamknięte";
@@ -16058,7 +15957,7 @@ async function save() {
 bindForm();
 fillForm(true);
 
-// Widoczność panelu — tak jak „Ręczna blokada zgłoszeń”.
+// Widoczność panelu — Główny Steward / ROOT oraz uprawnienie SYS (manage_settings).
 function refreshAccess() {
     const box = $("reportScheduleBox");
     if (!box) return;
@@ -16067,7 +15966,6 @@ function refreshAccess() {
 }
 wrap("applyStewardPermissions", refreshAccess);
 wrap("adminLogout", refreshAccess);
-wrap("renderManualUnlockAdminBox", renderPreview);
 refreshAccess();
 setInterval(() => { if ($("reportScheduleBox") && $("reportScheduleBox").style.display !== "none") renderPreview(); }, 30000);
 
@@ -17528,7 +17426,8 @@ function loDescribe(el) {
 const LO_PLACES = {
     formSection: "Nowe zgłoszenie", appealSection: "Apelacja", historySection: "Historia",
     chatSection: "Czat sędziowski", trashSection: "Kosz", adminSection: "Panel administracyjny",
-    statsSection: "Statystyki", usersSection: "Użytkownicy i role", decisionsSection: "Decyzje"
+    statsSection: "Statystyki", usersSection: "Użytkownicy i role", decisionsSection: "Decyzje",
+    liveSection: "Na żywo"
 };
 function loPlaceOf(el) {
     if (!el || el.nodeType !== 1) return "Strona";
@@ -18158,6 +18057,942 @@ database.ref(LO_PATH).on("value", snap => {
     try { localStorage.setItem(LO_CACHE, JSON.stringify(v)); } catch (e) {}
     loSetRules(v, true);
 }, err => console.warn("[131] Nie udało się wczytać układu strony:", err && err.message));
+})();
+</script>
+
+
+<style>
+/* ============================================================
+   === ROZBUDOWA 128 — PODGLĄD NA ŻYWO: style ===
+   ============================================================ */
+#liveMenuBtn{color:var(--green-text);border-bottom:3px solid transparent;}
+#liveMenuBtn .lv-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;margin-left:6px;border-radius:9px;background:#059669;color:#fff;font-size:10px;font-weight:800;letter-spacing:0;vertical-align:middle;}
+#liveMenuBtn .lv-count:empty{display:none;}
+.lv-pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:#10b981;margin-right:7px;vertical-align:middle;animation:lvPulse 2s ease-out infinite;}
+@keyframes lvPulse{0%{box-shadow:0 0 0 0 rgba(16,185,129,.6);}70%{box-shadow:0 0 0 7px rgba(16,185,129,0);}100%{box-shadow:0 0 0 0 rgba(16,185,129,0);}}
+@media (prefers-reduced-motion:reduce){.lv-pulse,.lv-typing .lv-dots::after{animation:none;}}
+
+.lv-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+.lv-conn{font-size:11px;color:var(--text-dim);display:flex;align-items:center;gap:4px;letter-spacing:.3px;}
+.lv-conn.warn{color:var(--amber-text);cursor:pointer;}
+.lv-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px;margin:16px 0;}
+.lv-tiles .stat-box strong{font-size:24px;}
+.lv-tiles .stat-box.hot strong{color:var(--amber-text);}
+.lv-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,330px);gap:16px;align-items:start;}
+@media (max-width:920px){.lv-layout{grid-template-columns:minmax(0,1fr);}}
+.lv-side .stats-group-box{margin-bottom:16px;}
+#lvTabs{flex-wrap:wrap;}
+#lvTabs .split-tab-btn.active,html[data-theme] #lvTabs .split-tab-btn.active{background:var(--red);border-color:var(--red);color:var(--rz-on-accent,#fff);}
+@media (max-width:560px){#lvTabs .split-tab-btn{padding:7px 10px;font-size:11px;letter-spacing:.5px;}.lv-person{padding:10px;gap:10px;}.lv-since{margin-left:0;}}
+.lv-empty{color:var(--text-dim);font-size:12px;padding:18px 8px;text-align:center;line-height:1.5;}
+
+.lv-person{display:flex;gap:12px;align-items:flex-start;padding:11px 14px;margin-bottom:8px;background:var(--bg-deep);border:1px solid var(--border);border-left:3px solid var(--lv-k,#64748b);border-radius:4px;}
+.lv-person.k-steward{--lv-k:var(--red);}
+.lv-person.k-judge{--lv-k:#a855f7;}
+.lv-person.k-driver{--lv-k:#3b82f6;}
+.lv-person.k-guest{--lv-k:#64748b;}
+.lv-person.st-idle,.lv-person.st-hidden{opacity:.6;}
+.lv-person.me{background:linear-gradient(90deg,rgba(16,185,129,.07),transparent 40%),var(--bg-deep);}
+.lv-av{position:relative;flex:none;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-family:var(--font-heading);font-weight:800;font-size:17px;}
+.lv-av img{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover;}
+.lv-av i{position:absolute;right:-2px;bottom:-2px;width:12px;height:12px;border-radius:50%;border:2px solid var(--bg-deep);background:#10b981;}
+.lv-av i.st-idle{background:#f59e0b;}
+.lv-av i.st-hidden{background:#6b7280;}
+.lv-main{flex:1;min-width:0;}
+.lv-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.lv-name{font-weight:700;font-size:14px;color:var(--text);overflow-wrap:anywhere;}
+.lv-name em{font-style:normal;font-weight:600;color:var(--green-text);font-size:11px;margin-left:4px;}
+.lv-kind{font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding:2px 6px;border-radius:3px;border:1px solid var(--border);color:var(--text-dim);white-space:nowrap;}
+.lv-kind.k-steward{color:var(--red-text);border-color:rgba(225,6,0,.4);background:rgba(225,6,0,.08);}
+.lv-kind.k-judge{color:var(--purple-text);border-color:rgba(168,85,247,.45);background:rgba(168,85,247,.08);}
+.lv-kind.k-driver{color:#60a5fa;border-color:rgba(59,130,246,.45);background:rgba(59,130,246,.08);}
+html[data-theme="light"] .lv-kind.k-driver,html[data-theme="graphite"] .lv-kind.k-driver{color:#1d4ed8;}
+.lv-since{margin-left:auto;font-size:11px;color:var(--text-dim);white-space:nowrap;font-variant-numeric:tabular-nums;}
+.lv-act{margin-top:4px;font-size:13px;line-height:1.5;color:var(--text);}
+.lv-ico{display:inline-block;width:20px;}
+.lv-dim{color:var(--text-dim);}
+.lv-meta{margin-top:4px;display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--text-dim);}
+.lv-meta .lv-warn{color:var(--amber-text);}
+.lv-typing{display:inline-block;margin-left:8px;font-size:11px;font-weight:700;color:var(--green-text);white-space:nowrap;}
+.lv-typing .lv-dots::after{content:"…";display:inline-block;animation:lvDots 1.2s steps(4,end) infinite;overflow:hidden;vertical-align:bottom;width:0;}
+@keyframes lvDots{to{width:1.1em;}}
+
+button.lv-case,span.lv-case{all:unset;display:inline-block;margin:0 0 0 4px;padding:0 6px;border-radius:3px;border:1px solid var(--border);font-size:11px;font-weight:700;line-height:18px;color:var(--text);background:rgba(255,255,255,.04);white-space:nowrap;vertical-align:baseline;font-family:var(--font-body);}
+button.lv-case{cursor:pointer;}
+button.lv-case::before{content:none;display:none;}
+button.lv-case:hover,button.lv-case:focus-visible{border-color:var(--gold);color:var(--gold);}
+html[data-theme="light"] button.lv-case:hover,html[data-theme="graphite"] button.lv-case:hover{color:#92400e;border-color:#b45309;}
+
+.lv-cg{padding:9px 0;border-top:1px dashed var(--border);font-size:12px;}
+.lv-cg:first-child{border-top:none;padding-top:0;}
+.lv-cg-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.lv-cg-head .lv-case{margin-left:0;}
+.lv-cg-sub{font-size:11px;color:var(--text-dim);margin:2px 0 4px;overflow-wrap:anywhere;}
+.lv-cg-who{display:flex;flex-direction:column;gap:2px;color:var(--text);}
+.lv-cg-who span b{font-weight:700;}
+.lv-conflict{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;color:#000;background:#fbbf24;}
+
+.lv-fi{display:flex;gap:8px;align-items:baseline;padding:5px 0;border-bottom:1px dashed var(--border);font-size:11px;line-height:1.45;color:var(--text);}
+.lv-fi:last-child{border-bottom:none;}
+.lv-ft{color:var(--text-dim);font-variant-numeric:tabular-nums;flex:none;min-width:36px;}
+.lv-fi .lv-case{font-size:10px;line-height:16px;}
+
+.lv-diag{margin-top:6px;border:1px solid var(--border);border-radius:4px;background:var(--bg-deep);font-size:12px;color:var(--text-dim);}
+.lv-diag>summary{cursor:pointer;padding:10px 14px;font-weight:700;letter-spacing:.5px;color:var(--text-dim);}
+.lv-diag>div{padding:0 14px 14px;line-height:1.6;}
+.lv-diag .lv-ok{color:var(--green-text);}
+.lv-diag .lv-bad{color:var(--red-text);}
+.lv-diag .lv-mid{color:var(--amber-text);}
+.lv-diag pre{white-space:pre-wrap;word-break:break-word;background:var(--bg-input);border:1px solid var(--border);border-radius:3px;padding:10px 12px;font-size:11px;color:var(--text);margin:8px 0;}
+
+.lv-rowchips .lv-chip{font-weight:700;cursor:default;}
+.lv-chip.k-steward,.lv-chip.k-judge{color:var(--green-text);border-color:rgba(16,185,129,.5);}
+.lv-chip.k-steward.work,.lv-chip.k-judge.work{color:#000;background:#fbbf24;border-color:#fbbf24;}
+.lv-chip.k-driver{color:#60a5fa;border-color:rgba(59,130,246,.5);}
+html[data-theme="light"] .lv-chip.k-driver,html[data-theme="graphite"] .lv-chip.k-driver{color:#1d4ed8;}
+#lvVerdictWarn{display:none;margin-bottom:12px;padding:9px 12px;border-radius:4px;font-size:12px;line-height:1.5;}
+#lvVerdictWarn.work{border:1px solid rgba(251,191,36,.5);background:rgba(251,191,36,.1);color:var(--amber-text);}
+#lvVerdictWarn.view{border:1px solid rgba(16,185,129,.4);background:rgba(16,185,129,.07);color:var(--green-text);}
+#lvDescViewers{display:none;margin:-6px 0 10px;font-size:11px;line-height:1.5;color:var(--green-text);}
+#lvDescViewers.work{color:var(--amber-text);}
+</style>
+
+<script>
+/* ============================================================
+   === ROZBUDOWA 128 — PODGLĄD NA ŻYWO: kto co robi w danym momencie ===
+   1. Każda otwarta karta strony (steward, sędzia gościnny, kierowca, gość) na bieżąco
+      zgłasza, kim jest i co robi: zakładka, sprawa, otwarte okno, „pisze…”,
+      bezczynność / karta w tle, kanał głosowy, rozmowa, telefon / komputer.
+      Zapisywane są wyłącznie te flagi i identyfikatory — nigdy treść wpisywana w pola,
+      a pola haseł i wyszukiwarki w ogóle nie są brane pod uwagę.
+   2. Zakładka „🟢 Na żywo” (tylko Główny Steward / ROOT): osoby online z aktualną
+      czynnością i czasem jej trwania, „Przy sprawach” (kto nad czym siedzi + ostrzeżenie,
+      gdy dwóch stewardów pracuje nad tą samą sprawą), ostatnie zmiany, goście.
+   3. Koordynacja w panelu (też tylko dla Głównego Stewarda / ROOT): znaczniki przy
+      zgłoszeniach otwartych teraz przez innych, ostrzeżenie w panelu werdyktu oraz
+      informacja w oknie sprawy, kto ją jeszcze ogląda.
+   Dane: presence/{id karty}. Wpis znika sam po zamknięciu karty (onDisconnect).
+   Gdy reguły Firebase nie pozwalają pisać w presence, moduł sam przechodzi na
+   voiceMembers/_presence (węzeł już zapisywalny dla kierowców i stewardów; moduł
+   kanałów głosowych go pomija), więc działa bez zmian w regułach. Zalecaną regułę
+   dla presence pokazuje zakładka „Na żywo” → Diagnostyka.
+   ============================================================ */
+(function () {
+"use strict";
+if (typeof database === "undefined" || typeof firebase === "undefined" || !firebase.database) {
+    console.error("[128] Brak Firebase — podgląd na żywo nieaktywny."); return;
+}
+
+const $ = id => document.getElementById(id);
+const L = (pl, en) => (typeof currentLang !== "undefined" && currentLang === "en") ? en : pl;
+const esc = s => (typeof escapeHtml === "function") ? escapeHtml(s) : String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const g = f => { try { return f(); } catch (e) { return undefined; } };
+const clip = (s, n) => String(s == null ? "" : s).slice(0, n);
+const TS = firebase.database.ServerValue.TIMESTAMP;
+
+const NODES = ["presence", "voiceMembers/_presence"];
+const STALE_MS = 10 * 60 * 1000;   // brak sygnału dłużej niż 10 min → wpis pomijany (np. uśpiony laptop)
+const IDLE_MS = 3 * 60 * 1000;     // 3 min bez myszy / klawiatury → „bezczynny”
+const TYPING_MS = 6000;            // „pisze…” jeszcze 6 s po ostatnim znaku
+const HEARTBEAT_MS = 60 * 1000;    // odświeżenie znacznika „ostatni sygnał”
+const MIN_WRITE_GAP = 700;         // nie częściej niż ~1,5 zapisu na sekundę
+const AVATAR_RE = /^https:\/\/cdn\.discordapp\.com\//;
+
+const SID = (() => {
+    const a = new Uint8Array(12); (window.crypto || window.msCrypto).getRandomValues(a);
+    return Array.prototype.map.call(a, b => (b % 36).toString(36)).join("");
+})();
+const DEV = ((navigator.userAgentData && navigator.userAgentData.mobile) || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "")) ? "mobile" : "desktop";
+
+let serverOffset = 0;
+database.ref(".info/serverTimeOffset").on("value", s => { serverOffset = Number(s.val()) || 0; });
+const sNow = () => Date.now() + serverOffset;
+
+/* ---------- słowniki ---------- */
+const ACT = {
+    form:                ["🏠", "Strona zgłoszeń", "Report page"],
+    report:              ["✍️", "Wypełnia zgłoszenie", "Filling in a report"],
+    report_preview:      ["👁", "Sprawdza zgłoszenie przed wysłaniem", "Reviewing a report before sending"],
+    appeal_form:         ["⚖️", "Formularz apelacji", "Appeal form"],
+    appeal:              ["⚖️", "Pisze apelację", "Writing an appeal"],
+    history:             ["📂", "Przegląda historię swoich spraw", "Browsing own case history"],
+    pchat:               ["💬", "Czat ze stewardami", "Chatting with stewards"],
+    statement:           ["📝", "Pisze oświadczenie", "Writing a statement"],
+    decisions:           ["📋", "Tablica decyzji", "Decisions board"],
+    login:               ["🔑", "Loguje się do panelu", "Logging in to the panel"],
+    admin:               ["🗂", "Lista zgłoszeń w panelu", "Reports list"],
+    verdict:             ["⚖️", "Przygotowuje werdykt", "Preparing a verdict"],
+    appeal_verdict:      ["⚖️", "Rozpatruje apelację", "Deciding an appeal"],
+    case_view:           ["🔍", "Przegląda sprawę", "Viewing a case"],
+    case_edit:           ["✏️", "Edytuje zgłoszenie", "Editing a report"],
+    notes:               ["🗒", "Pisze notatki do sprawy", "Writing case notes"],
+    appeal_edit:         ["✏️", "Edytuje apelację", "Editing an appeal"],
+    appeal_verdict_edit: ["✏️", "Edytuje werdykt apelacji", "Editing an appeal verdict"],
+    schat:               ["💬", "Czat sędziowski", "Steward chat"],
+    stats:               ["📈", "Statystyki", "Statistics"],
+    users:               ["👥", "Użytkownicy i role", "Users & roles"],
+    logs:                ["📜", "Dziennik akcji", "Action log"],
+    trash:               ["🗑", "Kosz", "Trash"],
+    bulletin:            ["📰", "Biuletyn rundy", "Round bulletin"],
+    search:              ["🔎", "Szuka sprawy", "Searching cases"],
+    live:                ["🟢", "Podgląd na żywo", "Live view"],
+    other:               ["🌐", "Na stronie", "On the site"]
+};
+// czynności, przy których dwóch stewardów naraz to potencjalna kolizja
+const WORK = new Set(["verdict", "appeal_verdict", "case_edit", "notes", "appeal_edit", "appeal_verdict_edit"]);
+const KIND = { steward: ["Steward", "Steward"], judge: ["Sędzia gościnny", "Guest judge"], driver: ["Kierowca", "Driver"], guest: ["Gość", "Guest"] };
+const KIND_ORDER = { steward: 0, judge: 1, driver: 2, guest: 3 };
+const STATE_ORDER = { active: 0, idle: 1, hidden: 2 };
+const actLabel = a => { const d = ACT[a] || ACT.other; return L(d[1], d[2]); };
+const actIcon = a => (ACT[a] || ACT.other)[0];
+const kindLabel = k => { const d = KIND[k] || KIND.guest; return L(d[0], d[1]); };
+
+/* ============================================================
+   1. KIM JESTEM I CO ROBIĘ (ta karta)
+   ============================================================ */
+// Awatar z Discorda dla danego ID (zdjęcie z logowania albo domyślny awatar Discorda).
+function avatarFor(id) {
+    const u = String(g(() => knownDiscordAvatar(id)) || "");
+    return AVATAR_RE.test(u) ? u.slice(0, 200) : "";
+}
+function identity() {
+    const st = g(() => (isAdminAuthenticated && loggedInSteward) ? loggedInSteward : null);
+    if (st) {
+        const ext = st.id === "external-judge";
+        return { kind: ext ? "judge" : "steward", role: "steward", name: clip(st.nick || "Steward", 60),
+                 discordId: ext ? "" : clip(st.id, 30), rank: clip(st.role, 40), avatar: ext ? "" : avatarFor(st.id) };
+    }
+    const d = g(() => discordDriverAuth);
+    if (d && d.id) {
+        return { kind: "driver", role: "player", name: clip(d.globalName || d.username || "Kierowca", 60),
+                 discordId: clip(d.id, 30), rank: "", avatar: avatarFor(d.id) };
+    }
+    return { kind: "guest", role: "player", name: "Gość", discordId: "", rank: "", avatar: "" };
+}
+// Podgląd (zakładka, znaczniki w panelu, ostrzeżenia) widzi WYŁĄCZNIE Główny Steward (oraz ROOT).
+// Pozostali stewardzi, sędziowie gościnni i kierowcy tylko zgłaszają swoją obecność — niczego nie widzą.
+const LEAD_ROLES = ["Główny Steward", "ROOT"];
+const canView = () => { const me = identity(); return me.kind === "steward" && LEAD_ROLES.includes(me.rank); };
+
+function shown(id) {
+    const el = $(id);
+    if (!el) return false;
+    try { return getComputedStyle(el).display !== "none"; } catch (e) { return false; }
+}
+const val = id => { const el = $(id); return el ? String(el.value || "").trim() : ""; };
+const optText = id => { const el = $(id); return el && el.selectedIndex >= 0 && el.options[el.selectedIndex] ? String(el.options[el.selectedIndex].text || "").trim() : ""; };
+function activeSection() { const s = document.querySelector(".card .section.active") || document.querySelector(".section.active"); return s ? s.id : ""; }
+function verdictTarget() {
+    const v = val("caseId");
+    if (!v) return null;
+    const m = v.match(/^(.*?)\s*\(([^()]+)\)\s*$/);
+    return m ? { c: m[1].trim(), a: m[2].trim() } : { c: v, a: "" };
+}
+function trackSplit() { return [optText("track"), val("split")].filter(Boolean).join(" · "); }
+function formDraft() { return ["details", "accusedNick", "accusedDiscordId", "evidence"].some(id => val(id)); }
+
+function detect() {
+    const me = identity(), sec = activeSection();
+    let a = "other", c = "", x = "";
+    if (shown("adminLoginModal") || shown("externalJudgeModal")) a = "login";
+    else if (shown("descModal")) {
+        c = g(() => currentlyEditedReportId) || "";
+        const notes = $("modalNotesField");
+        a = g(() => isEditModeActive) ? "case_edit"
+          : (notes && document.activeElement === notes && !notes.readOnly) ? "notes" : "case_view";
+    }
+    else if (shown("appealEditModal")) { a = "appeal_edit"; c = g(() => currentlyEditedAppealId) || ""; }
+    else if (shown("appealVerdictEditModal")) { a = "appeal_verdict_edit"; c = g(() => currentlyEditedAppealVerdictCaseId) || ""; }
+    else if (shown("statementModal")) { a = "statement"; c = ((($("statementTitle") || {}).textContent || "").split("—")[1] || "").trim(); }
+    else if (shown("reportPreviewModal")) { a = "report_preview"; x = trackSplit(); }
+    else if (shown("bulletinModal")) a = "bulletin";
+    else if (shown("logVerdictPreviewModal")) a = "logs";
+    else if (shown("quickSearchOverlay")) a = "search";
+    else switch (sec) {
+        case "formSection":
+            if (me.kind === "driver" && formDraft()) { a = "report"; x = trackSplit(); }
+            else { a = "form"; if (shown("siteReportWindowLock")) x = "closed"; }
+            break;
+        case "appealSection":    c = val("appealCaseId"); a = c ? "appeal" : "appeal_form"; break;
+        case "historySection":   c = g(() => selectedPlayerCaseId) || ""; a = c ? "pchat" : "history"; break;
+        case "decisionsSection": a = "decisions"; break;
+        case "chatSection":      c = val("chatCaseSelect"); a = "schat"; break;
+        case "adminSection": {
+            const v = verdictTarget();
+            if (v) { c = v.c; x = v.a; a = v.a ? "appeal_verdict" : "verdict"; } else a = "admin";
+            break;
+        }
+        case "statsSection": a = "stats"; break;
+        case "usersSection": a = "users"; break;
+        case "trashSection": a = "trash"; break;
+        case "liveSection":  a = "live"; break;
+    }
+    return { a, c: clip(c, 60), x: clip(x, 80), sec: clip(sec, 40) };
+}
+
+function extras() {
+    let voice = "", call = "";
+    const vs = $("vvStatus");
+    if (vs && vs.style.display === "flex") voice = clip((($("vvStatusTitle") || {}).textContent || "").trim(), 60);
+    const vb = $("vcActiveBar");
+    if (vb && vb.classList.contains("show")) call = clip(g(() => vcCurrentCaseId) || "?", 60);
+    return { voice, call };
+}
+
+/* --- pisanie i bezczynność (bez zapisywania treści) --- */
+let lastType = 0, lastInput = Date.now();
+function countsAsTyping(t) {
+    if (!t || !t.tagName) return false;
+    if (t.closest && t.closest("#liveSection")) return false;
+    if (t.classList && t.classList.contains("search-input")) return false;
+    if (/search|qsInput/i.test(t.id || "")) return false;
+    if (t.tagName === "TEXTAREA") return true;
+    return t.tagName === "INPUT" && /^(text|url|email|number|tel|)$/i.test(t.getAttribute("type") || "");
+}
+document.addEventListener("input", e => { if (countsAsTyping(e.target)) { const was = Date.now() - lastType < TYPING_MS; lastType = Date.now(); if (!was) kick(); } }, true);
+function onUserActivity() { const n = Date.now(), wasIdle = n - lastInput > IDLE_MS; lastInput = n; if (wasIdle) kick(); }
+["mousemove", "mousedown", "keydown", "touchstart", "wheel", "scroll"].forEach(ev => document.addEventListener(ev, onUserActivity, { passive: true, capture: true }));
+document.addEventListener("visibilitychange", () => { if (!document.hidden) lastInput = Date.now(); kick(); });
+document.addEventListener("change", () => kick(), true);
+document.addEventListener("click", () => kick(), true);
+
+/* ============================================================
+   2. ZAPIS OBECNOŚCI DO FIREBASE (z automatycznym węzłem zapasowym)
+   ============================================================ */
+const W = { node: null, mode: "init", err: "", lastSig: "", lastWrite: 0, busy: false, pending: false,
+            timer: null, needFull: true, needDisc: true, since: 0, sinceKey: "", joinedAt: 0, deniedAt: 0 };
+const isDenied = e => /permission/i.test(String((e && e.code) || "") + " " + String((e && e.message) || e || ""));
+const errMsg = e => clip((e && (e.code || e.message)) || String(e || ""), 160);
+
+function buildPayload() {
+    const me = identity(), d = detect(), ex = extras(), n = Date.now();
+    const key = d.a + "|" + d.c + "|" + d.x;
+    if (key !== W.sinceKey) { W.sinceKey = key; W.since = sNow(); }
+    if (!W.joinedAt) W.joinedAt = sNow();
+    return {
+        v: 1, kind: me.kind, role: me.role, name: me.name, discordId: me.discordId, rank: me.rank, avatar: me.avatar,
+        act: d.a, c: d.c, x: d.x, sec: d.sec,
+        typing: n - lastType < TYPING_MS,
+        state: document.hidden ? "hidden" : (n - lastInput > IDLE_MS ? "idle" : "active"),
+        voice: ex.voice, call: ex.call, dev: DEV, since: W.since, joinedAt: W.joinedAt
+    };
+}
+const sigOf = p => JSON.stringify([p.kind, p.name, p.discordId, p.rank, p.avatar, p.act, p.c, p.x, p.typing, p.state, p.voice, p.call]);
+
+async function setWithFallback(payload) {
+    const order = (W.node && !W.retryPrimary) ? [W.node].concat(NODES.filter(n => n !== W.node)) : NODES.slice();
+    W.retryPrimary = false;
+    let lastErr = null;
+    for (const node of order) {
+        const ref = database.ref(node + "/" + SID);
+        try {
+            await ref.set(payload);
+            if (W.node !== node || W.needDisc) {
+                W.needDisc = false;
+                ref.onDisconnect().remove().catch(e => console.warn("[128] onDisconnect:", errMsg(e)));
+            }
+            if (W.node && W.node !== node) database.ref(W.node + "/" + SID).remove().catch(() => {});
+            if (W.node !== node) console.log("[128] Obecność zapisywana w: " + node);
+            W.node = node; W.mode = node === NODES[0] ? "ok" : "fallback"; W.err = lastErr ? errMsg(lastErr) : "";
+            return true;
+        } catch (e) {
+            lastErr = e;
+            if (!isDenied(e)) { W.err = errMsg(e); return false; }
+        }
+    }
+    W.node = null; W.mode = "denied"; W.err = errMsg(lastErr); W.deniedAt = Date.now();
+    console.warn("[128] Zapis obecności odrzucony przez reguły Firebase (" + W.err + "). Szczegóły: zakładka „Na żywo” → Diagnostyka.");
+    return false;
+}
+
+async function writeNow() {
+    if (W.busy) { W.pending = true; return; }
+    const gap = Date.now() - W.lastWrite;
+    if (gap < MIN_WRITE_GAP) { clearTimeout(W.timer); W.timer = setTimeout(tick, MIN_WRITE_GAP - gap + 10); return; }
+    const p = buildPayload(), sig = sigOf(p);
+    W.busy = true; W.lastWrite = Date.now();
+    try {
+        if (await setWithFallback(Object.assign({}, p, { seen: TS }))) { W.lastSig = sig; W.needFull = false; }
+    } catch (e) { W.err = errMsg(e); }
+    finally {
+        W.busy = false;
+        if (W.pending) { W.pending = false; setTimeout(tick, MIN_WRITE_GAP); }
+        renderDiag();
+    }
+}
+
+let started = false;
+function tick() {
+    if (!started) return;
+    const p = buildPayload(), sig = sigOf(p), n = Date.now();
+    const denied = W.mode === "denied" && n - W.deniedAt < 5 * HEARTBEAT_MS;
+    // Bez zalogowania w Firebase (ekran logowania) baza i tak nie przyjmie zapisu — nie próbujemy.
+    const signedIn = typeof currentUid !== "function" || !!currentUid();
+    if (signedIn && !denied && (W.needFull || sig !== W.lastSig || n - W.lastWrite > HEARTBEAT_MS)) writeNow();
+    listen(canView());
+    localViews();
+}
+let kickT = null;
+function kick() { clearTimeout(kickT); kickT = setTimeout(tick, 120); }
+
+// po zerwaniu i odnowieniu połączenia Firebase usuwa wpis (onDisconnect) — odtwarzamy go
+database.ref(".info/connected").on("value", s => {
+    if (s.val() === true) { W.needFull = true; W.needDisc = true; W.lastWrite = 0; kick(); }
+});
+// steward zalogował się do zapisu w bazie (wariant B) — ponów próbę zapisu w presence
+g(() => { const au = (typeof fbAuth !== "undefined" && fbAuth) || null; if (au) au.onAuthStateChanged(() => { if (W.mode !== "ok") { W.retryPrimary = true; W.deniedAt = 0; W.needFull = true; W.lastWrite = 0; kick(); } }); });
+window.addEventListener("pagehide", () => { if (W.node) { try { database.ref(W.node + "/" + SID).remove(); } catch (e) {} } });
+
+/* ============================================================
+   3. ODCZYT (tylko Główny Steward / ROOT)
+   ============================================================ */
+const R = { on: false, data: [{}, {}], err: ["", ""], loaded: [false, false], offs: [], prev: null, feed: [], filter: "all", lastData: 0 };
+
+function listen(on) {
+    if (on === R.on) return;
+    R.on = on;
+    if (on) {
+        NODES.forEach((node, i) => {
+            const ref = database.ref(node);
+            const h = ref.on("value",
+                s => { R.data[i] = s.val() || {}; R.err[i] = ""; R.loaded[i] = true; onData(); },
+                e => { R.data[i] = {}; R.err[i] = errMsg(e); R.loaded[i] = true; onData(); });
+            R.offs.push(() => ref.off("value", h));
+        });
+    } else {
+        R.offs.forEach(f => { try { f(); } catch (e) {} });
+        R.offs = []; R.data = [{}, {}]; R.err = ["", ""]; R.loaded = [false, false]; R.prev = null; R.feed = [];
+        localViews();
+    }
+    updateMenu();
+}
+
+function norm(sid, p, node) {
+    const av = String(p.avatar || "");
+    return {
+        sid, node, self: sid === SID,
+        kind: KIND[p.kind] ? p.kind : "guest",
+        name: clip(p.name, 60) || "?", discordId: clip(p.discordId, 30), rank: clip(p.rank, 40),
+        avatar: AVATAR_RE.test(av) ? av.slice(0, 200) : "",
+        act: ACT[p.act] ? p.act : "other", c: clip(p.c, 60), x: clip(p.x, 80),
+        typing: p.typing === true, state: STATE_ORDER[p.state] != null ? p.state : "active",
+        voice: clip(p.voice, 60), call: clip(p.call, 60), dev: p.dev === "mobile" ? "mobile" : "desktop",
+        since: Number(p.since) || 0, joinedAt: Number(p.joinedAt) || 0, seen: Number(p.seen) || 0
+    };
+}
+function sessions() {
+    const n = sNow(), bySid = new Map();
+    R.data.forEach((obj, i) => {
+        if (!obj || typeof obj !== "object") return;
+        Object.keys(obj).forEach(sid => {
+            const p = obj[sid];
+            if (!p || typeof p !== "object" || !p.kind || !p.act) return;
+            if (p.seen && n - Number(p.seen) > STALE_MS) return;
+            const s = norm(sid, p, i), prev = bySid.get(sid);
+            if (!prev || s.seen > prev.seen) bySid.set(sid, s);
+        });
+    });
+    return [...bySid.values()];
+}
+const pkey = s => s.kind === "guest" ? "g:" + s.sid : (s.discordId ? "id:" + s.discordId : s.kind + ":" + s.name.toLowerCase());
+const myKey = () => { const me = identity(); return me.kind === "guest" ? "g:" + SID : (me.discordId ? "id:" + me.discordId : me.kind + ":" + me.name.toLowerCase()); };
+const rankSession = (a, b) => (STATE_ORDER[a.state] - STATE_ORDER[b.state]) || ((WORK.has(b.act) ? 1 : 0) - (WORK.has(a.act) ? 1 : 0)) || (b.since - a.since);
+
+/* --- awatary: prawdziwe zdjęcie z dowolnej karty tej osoby → zapamiętane wcześniej → domyślny awatar Discorda --- */
+const REAL_AV_RE = /^https:\/\/cdn\.discordapp\.com\/avatars\//;
+const AV_CACHE_KEY = "lvAvatarCache", AV_CACHE_MAX = 300;
+const avCache = (() => {
+    const m = new Map();
+    try { const o = JSON.parse(localStorage.getItem(AV_CACHE_KEY) || "{}"); Object.keys(o).forEach(k => { if (/^\d{5,25}$/.test(k) && REAL_AV_RE.test(String(o[k]))) m.set(k, String(o[k]).slice(0, 200)); }); } catch (e) {}
+    return m;
+})();
+function rememberAvatar(id, url) {
+    if (!id || !REAL_AV_RE.test(url) || avCache.get(id) === url) return;
+    avCache.delete(id); avCache.set(id, url);
+    while (avCache.size > AV_CACHE_MAX) avCache.delete(avCache.keys().next().value);
+    try { localStorage.setItem(AV_CACHE_KEY, JSON.stringify(Object.fromEntries(avCache))); } catch (e) {}
+}
+function defaultAvatar(id) {
+    if (!/^\d{5,25}$/.test(String(id || ""))) return "";
+    const u = String(g(() => discordDefaultAvatar(id)) || "");
+    return AVATAR_RE.test(u) ? u : "";
+}
+// adresy, które się nie wczytały (zbiera je onerror w personHtml) — nie próbujemy ich przy każdym odświeżeniu
+const badAv = u => !!(window.lvBadAv && window.lvBadAv.has(u));
+function pickAvatar(ss) {
+    const id = (ss.find(s => s.discordId) || {}).discordId || "";
+    const real = ss.find(s => REAL_AV_RE.test(s.avatar) && !badAv(s.avatar));
+    if (real) { rememberAvatar(id, real.avatar); return real.avatar; }
+    if (id && avCache.has(id)) {
+        if (!badAv(avCache.get(id))) return avCache.get(id);
+        avCache.delete(id);
+        try { localStorage.setItem(AV_CACHE_KEY, JSON.stringify(Object.fromEntries(avCache))); } catch (e) {}
+    }
+    const any = ss.find(s => s.avatar && !badAv(s.avatar));
+    if (any) return any.avatar;
+    const d = defaultAvatar(id);
+    return badAv(d) ? "" : d;
+}
+
+function people(list) {
+    const map = new Map();
+    list.forEach(s => { const k = pkey(s); if (!map.has(k)) map.set(k, []); map.get(k).push(s); });
+    return [...map.entries()].map(([key, ss]) => {
+        ss.sort(rankSession);
+        const kind = ss.map(s => s.kind).sort((a, b) => KIND_ORDER[a] - KIND_ORDER[b])[0];
+        const avatar = kind === "guest" ? "" : pickAvatar(ss);
+        return { key, kind, avatar, main: ss[0], sessions: ss, self: key === myKey() || ss.some(s => s.self) };
+    });
+}
+
+/* --- sprawy --- */
+function caseInfo(c) {
+    if (!c) return null;
+    const incs = g(() => globalIncidents) || [], apps = g(() => globalAppeals) || [];
+    const inc = incs.find(r => r.id === c || r.fiaId === c);
+    if (inc) return { key: inc.id, id: inc.id, label: inc.fiaId || inc.id, inc };
+    const ap = apps.find(a => a.appealId === c || a.id === c);
+    if (ap) {
+        const base = incs.find(r => r.id === ap.caseId || r.fiaId === ap.caseId);
+        return { key: base ? base.id : (ap.caseId || c), id: base ? base.id : "", label: ap.appealId || ap.id, inc: base || null, appeal: ap };
+    }
+    return { key: c, id: "", label: c, inc: null };
+}
+function caseTitle(ci) {
+    if (!ci || !ci.inc) return ci && ci.appeal ? L("Apelacja", "Appeal") : "";
+    const r = ci.inc;
+    return [(r.nick || "?") + " vs " + (r.accusedNick || "?"), r.track, r.split, r.status].filter(Boolean).join(" · ");
+}
+function caseChip(c) {
+    const ci = caseInfo(c);
+    if (!ci) return "";
+    const t = caseTitle(ci);
+    return ci.id
+        ? `<button type="button" class="lv-case" data-lv-case="${esc(ci.id)}" title="${esc(t ? t + " — " : "")}${esc(L("kliknij, aby otworzyć sprawę", "click to open the case"))}">${esc(ci.label)}</button>`
+        : `<span class="lv-case"${t ? ` title="${esc(t)}"` : ""}>${esc(ci.label)}</span>`;
+}
+function actHtml(s) {
+    let h = `<span class="lv-ico">${actIcon(s.act)}</span>${esc(actLabel(s.act))}`;
+    if (s.c) h += caseChip(s.c);
+    else if (s.act === "schat") h += ` <span class="lv-dim">${esc(L("(bez wybranej sprawy)", "(no case selected)"))}</span>`;
+    if (s.act === "form" && s.x === "closed") h += ` <span class="lv-dim">· ${esc(L("zgłoszenia zamknięte", "reports closed"))}</span>`;
+    else if (s.x && (s.act === "report" || s.act === "report_preview")) h += ` <span class="lv-dim">· ${esc(s.x)}</span>`;
+    else if (s.x && s.act === "appeal_verdict") h += ` <span class="lv-dim">· ${esc(s.x)}</span>`;
+    return h;
+}
+
+/* --- czas --- */
+function ago(t) {
+    if (!t) return "";
+    const s = Math.max(0, Math.round((sNow() - t) / 1000));
+    if (s < 60) return s + " s";
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + " min";
+    return Math.floor(m / 60) + " h " + (m % 60) + " min";
+}
+const hhmm = t => { const d = new Date(t - serverOffset); return isNaN(d) ? "" : d.toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" }); };
+function hue(str) { let h = 0; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360; return h; }
+const firstName = n => { const s = String(n || "?").trim(); return s.length > 14 ? s.slice(0, 13) + "…" : s; };
+
+/* --- zmiany (oś zdarzeń) --- */
+function pushFeed(t, s, type) {
+    const last = R.feed[0], pk = pkey(s);
+    // odświeżenie strony = „opuszcza” + po chwili „wchodzi / loguje się” → nie zaśmiecamy osi
+    if (type === "join" || type === "login") {
+        const i = R.feed.findIndex(f => f.pk === pk && (f.type === "leave" || f.type === "logout") && t - f.t < 20000);
+        if (i >= 0) { R.feed.splice(i, 1); return; }
+    }
+    const item = { t, sid: s.sid, pk, name: s.name, kind: s.kind, type, act: s.act, c: s.c, x: s.x };
+    // ten sam człowiek przeskakuje szybko między zakładkami → nadpisz zamiast mnożyć wpisy
+    if (last && last.sid === s.sid && type === "act" && last.type === "act" && t - last.t < 20000) R.feed[0] = item;
+    else R.feed.unshift(item);
+    if (R.feed.length > 80) R.feed.length = 80;
+}
+function diffFeed(list) {
+    if (!(R.loaded[0] && R.loaded[1])) return; // punkt odniesienia dopiero, gdy oba węzły są wczytane
+    const cur = new Map(list.map(s => [s.sid, s]));
+    if (R.prev) {
+        const t = sNow();
+        const prevKeys = new Set([...R.prev.values()].map(pkey)), curKeys = new Set(list.map(pkey));
+        cur.forEach((s, sid) => {
+            if (s.self || s.kind === "guest" && !R.prev.has(sid)) return;
+            const p = R.prev.get(sid);
+            if (!p) { if (!prevKeys.has(pkey(s))) pushFeed(t, s, "join"); }
+            else if (p.kind !== s.kind) pushFeed(t, s.kind === "guest" ? p : s, s.kind === "guest" ? "logout" : "login");
+            else if (s.kind !== "guest" && (p.act !== s.act || p.c !== s.c)) pushFeed(t, s, "act");
+        });
+        R.prev.forEach((p, sid) => {
+            if (!cur.has(sid) && !p.self && p.kind !== "guest" && !curKeys.has(pkey(p))) pushFeed(t, p, "leave");
+        });
+    }
+    R.prev = cur;
+}
+
+function onData() {
+    R.lastData = Date.now();
+    diffFeed(sessions());
+    updateMenu();
+    renderLive();
+    localViews();
+}
+
+/* ============================================================
+   4. INTERFEJS: przycisk w menu + zakładka „Na żywo”
+   ============================================================ */
+const statsBtn = $("statsMenuBtn");
+const menuHtml = `<button id="liveMenuBtn" type="button" style="display:none;" onclick="openLiveSection()" title="Kto jest teraz na stronie i co robi"><span class="lv-pulse"></span><span id="liveMenuLabel">Na żywo</span><span class="lv-count" id="liveMenuCount"></span></button>`;
+if (statsBtn) statsBtn.insertAdjacentHTML("afterend", menuHtml);
+else { const m = document.querySelector(".card .menu"); if (m) m.insertAdjacentHTML("beforeend", menuHtml); }
+
+const anchor = $("usersSection") || $("statsSection");
+const sectionHtml = `
+  <div id="liveSection" class="section">
+    <div class="lv-head">
+      <h2 class="section-title" id="lvTitle" style="margin-bottom:0;">🟢 Na żywo — kto co robi</h2>
+      <div class="lv-conn" id="lvConn"></div>
+    </div>
+    <p class="subtitle" id="lvSubtitle" style="margin:8px 0 0;"></p>
+    <div class="lv-tiles" id="lvTiles"></div>
+    <div class="split-tabs" id="lvTabs">
+      <button type="button" class="split-tab-btn active" data-lv-filter="all"></button>
+      <button type="button" class="split-tab-btn" data-lv-filter="staff"></button>
+      <button type="button" class="split-tab-btn" data-lv-filter="drivers"></button>
+      <button type="button" class="split-tab-btn" data-lv-filter="guests"></button>
+    </div>
+    <div class="lv-layout">
+      <div id="lvPeople"></div>
+      <aside class="lv-side">
+        <div class="stats-group-box"><div class="stats-group-title" id="lvCasesTitle"></div><div id="lvCases"></div></div>
+        <div class="stats-group-box"><div class="stats-group-title" id="lvFeedTitle"></div><div id="lvFeed"></div></div>
+      </aside>
+    </div>
+    <details class="lv-diag" id="lvDiag">
+      <summary id="lvDiagSummary"></summary>
+      <div id="lvDiagBody"></div>
+    </details>
+  </div>`;
+if (anchor) anchor.insertAdjacentHTML("afterend", sectionHtml);
+else { const card = document.querySelector(".card"); if (card) card.insertAdjacentHTML("beforeend", sectionHtml); }
+
+// ostrzeżenie w panelu werdyktu + informacja w oknie sprawy
+const respForm = $("responseForm");
+if (respForm) respForm.insertAdjacentHTML("beforebegin", `<div id="lvVerdictWarn" role="status"></div>`);
+const descHead = $("descModalTitle") && $("descModalTitle").parentElement;
+if (descHead) descHead.insertAdjacentHTML("afterend", `<div id="lvDescViewers"></div>`);
+
+const liveActive = () => { const s = $("liveSection"); return !!s && s.classList.contains("active"); };
+
+window.openLiveSection = function () {
+    if (!canView()) { alert(L("Podgląd na żywo jest dostępny tylko dla Głównego Stewarda.", "The live view is available to the Lead Steward only.")); return; }
+    showSection("liveSection");
+    listen(true);
+    renderLive();
+};
+
+function updateMenu() {
+    const btn = $("liveMenuBtn");
+    if (!btn) return;
+    const staff = canView();
+    btn.style.display = staff ? "block" : "none";
+    if (!staff) { if (liveActive()) showSection("formSection"); return; }
+    const lbl = $("liveMenuLabel"); if (lbl) lbl.textContent = L("Na żywo", "Live");
+    const ppl = people(sessions()).filter(p => !p.self);
+    const cnt = $("liveMenuCount"); if (cnt) cnt.textContent = ppl.length ? String(ppl.length) : "";
+    const k = kk => ppl.filter(p => kk.includes(p.kind)).length;
+    btn.title = L(`Teraz na stronie: stewardzi ${k(["steward", "judge"])}, kierowcy ${k(["driver"])}, goście ${k(["guest"])}`,
+                  `On the site now: stewards ${k(["steward", "judge"])}, drivers ${k(["driver"])}, guests ${k(["guest"])}`);
+    btn.style.borderBottomColor = liveActive() ? "var(--green-text)" : "transparent";
+}
+
+function personHtml(p) {
+    const s = p.main, nm = s.name;
+    const initial = esc(nm.trim().charAt(0).toUpperCase() || "?");
+    // Zdjęcie nie wczyta się (np. ktoś zmienił awatar na Discordzie) → domyślny awatar Discorda, a gdy i to zawiedzie — litera pod spodem.
+    const av = p.avatar || "", fb = badAv(defaultAvatar(s.discordId)) ? "" : defaultAvatar(s.discordId);
+    const img = av ? `<img src="${esc(av)}" alt="" loading="lazy" referrerpolicy="no-referrer"${fb && fb !== av ? ` data-fb="${esc(fb)}"` : ""} onerror="(window.lvBadAv=window.lvBadAv||new Set()).add(this.getAttribute('src'));if(this.dataset.fb){this.src=this.dataset.fb;this.removeAttribute('data-fb')}else{this.remove()}">` : "";
+    const avatar = `<div class="lv-av" style="background:hsl(${hue(nm)},45%,36%)">${initial}${img}<i class="st-${esc(s.state)}" title="${esc(stateLabel(s.state))}"></i></div>`;
+    const rank = s.rank && p.kind === "steward" && s.rank.toLowerCase() !== "steward" ? " · " + s.rank : "";
+    const meta = [];
+    if (s.state === "idle") meta.push(`<span class="lv-warn">💤 ${esc(L("bezczynny (brak ruchu > 3 min)", "idle (no activity > 3 min)"))}</span>`);
+    if (s.state === "hidden") meta.push(`<span>🌙 ${esc(L("karta w tle", "tab in background"))}</span>`);
+    const voice = p.sessions.find(x => x.voice), call = p.sessions.find(x => x.call);
+    if (voice) meta.push(`<span>🎧 ${esc(voice.voice)}</span>`);
+    if (call) { const ci = caseInfo(call.call); meta.push(`<span>📞 ${esc(L("rozmowa", "call"))}${ci ? " · " + esc(ci.label) : ""}</span>`); }
+    meta.push(`<span>${s.dev === "mobile" ? "📱 " + esc(L("telefon", "phone")) : "💻 " + esc(L("komputer", "computer"))}</span>`);
+    const joined = Math.min(...p.sessions.map(x => x.joinedAt || Infinity));
+    if (isFinite(joined)) meta.push(`<span>${esc(L("na stronie od", "online since"))} ${esc(hhmm(joined))}</span>`);
+    if (p.sessions.length > 1) {
+        const rest = p.sessions.slice(1).map(x => actIcon(x.act) + " " + actLabel(x.act) + (x.c ? " " + (caseInfo(x.c) || {}).label : "")).join(", ");
+        meta.push(`<span title="${esc(rest)}">🗂 ${esc(L(`${p.sessions.length} karty`, `${p.sessions.length} tabs`))}: ${esc(rest.length > 70 ? rest.slice(0, 69) + "…" : rest)}</span>`);
+    }
+    const typing = p.sessions.some(x => x.typing) ? `<span class="lv-typing">✍️ ${esc(L("pisze", "typing"))}<span class="lv-dots"></span></span>` : "";
+    return `<div class="lv-person k-${esc(p.kind)} st-${esc(s.state)}${p.self ? " me" : ""}">
+      ${avatar}
+      <div class="lv-main">
+        <div class="lv-top"><span class="lv-name">${esc(nm)}${p.self ? `<em>(${esc(L("Ty", "You"))})</em>` : ""}</span><span class="lv-kind k-${esc(p.kind)}">${esc(kindLabel(p.kind) + rank)}</span><span class="lv-since" title="${esc(L("Jak długo trwa obecna czynność", "How long the current activity has lasted"))}">⏱ ${esc(ago(s.since))}</span></div>
+        <div class="lv-act">${actHtml(s)}${typing}</div>
+        <div class="lv-meta">${meta.join("")}</div>
+      </div>
+    </div>`;
+}
+const stateLabel = st => st === "idle" ? L("bezczynny", "idle") : st === "hidden" ? L("karta w tle", "background tab") : L("aktywny", "active");
+
+function guestsHtml(guests) {
+    if (!guests.length) return "";
+    const counts = new Map();
+    guests.forEach(p => { const k = p.main.act + (p.main.x === "closed" ? "|closed" : ""); counts.set(k, (counts.get(k) || 0) + 1); });
+    const parts = [...counts.entries()].sort((a, b) => b[1] - a[1])
+        .map(([k, n]) => `${actIcon(k.split("|")[0])} ${esc(actLabel(k.split("|")[0]))}${n > 1 ? ` <b>×${n}</b>` : ""}`).join(" &nbsp;·&nbsp; ");
+    const mobile = guests.filter(p => p.main.dev === "mobile").length;
+    return `<div class="lv-person k-guest">
+      <div class="lv-av" style="background:#475569;">👀</div>
+      <div class="lv-main">
+        <div class="lv-top"><span class="lv-name">${esc(L("Goście (niezalogowani)", "Guests (not logged in)"))}: ${guests.length}</span></div>
+        <div class="lv-act">${parts}</div>
+        <div class="lv-meta"><span>📱 ${mobile} · 💻 ${guests.length - mobile}</span><span>${esc(L("Szczegóły w zakładce „Goście”.", "Details in the “Guests” tab."))}</span></div>
+      </div>
+    </div>`;
+}
+
+function casesHtml(list) {
+    const groups = new Map();
+    list.filter(s => s.c && s.kind !== "guest").forEach(s => {
+        const ci = caseInfo(s.c), k = ci.key;
+        if (!groups.has(k)) groups.set(k, { ci, ss: [] });
+        groups.get(k).ss.push(s);
+    });
+    if (!groups.size) return `<div class="lv-empty">${esc(L("Nikt nie ma teraz otwartej żadnej sprawy.", "Nobody has a case open right now."))}</div>`;
+    const arr = [...groups.values()].map(gr => {
+        const byPerson = new Map();
+        gr.ss.sort(rankSession).forEach(s => { if (!byPerson.has(pkey(s))) byPerson.set(pkey(s), s); });
+        const ss = [...byPerson.values()];
+        const workers = ss.filter(s => (s.kind === "steward" || s.kind === "judge") && WORK.has(s.act));
+        return { ci: gr.ci, ss, conflict: workers.length >= 2 };
+    }).sort((a, b) => (b.conflict - a.conflict) || (b.ss.length - a.ss.length));
+    return arr.map(gr => {
+        const title = caseTitle(gr.ci);
+        return `<div class="lv-cg">
+          <div class="lv-cg-head">${caseChip(gr.ci.id || gr.ci.label)}${gr.conflict ? `<span class="lv-conflict" title="${esc(L("Kilku stewardów pracuje naraz nad tą sprawą", "Several stewards are working on this case at once"))}">⚠️ ${esc(L("kolizja", "clash"))}</span>` : ""}</div>
+          ${title ? `<div class="lv-cg-sub">${esc(title)}</div>` : ""}
+          <div class="lv-cg-who">${gr.ss.map(s => `<span>${actIcon(s.act)} <b>${esc(s.name)}</b>${s.self ? " (" + esc(L("Ty", "You")) + ")" : ""} <span class="lv-dim">— ${esc(actLabel(s.act).toLowerCase())}${s.typing ? ", " + esc(L("pisze…", "typing…")) : ""}</span></span>`).join("")}</div>
+        </div>`;
+    }).join("");
+}
+
+function feedHtml() {
+    if (!R.feed.length) return `<div class="lv-empty">${esc(L("Tu pojawią się wejścia, wyjścia i zmiany czynności — od chwili otwarcia panelu.", "Arrivals, departures and activity changes will appear here — since you opened the panel."))}</div>`;
+    return R.feed.slice(0, 30).map(f => {
+        let what;
+        if (f.type === "join") what = `${esc(L("wchodzi na stronę", "arrives"))} — ${actIcon(f.act)} ${esc(actLabel(f.act).toLowerCase())}${f.c ? caseChip(f.c) : ""}`;
+        else if (f.type === "leave") what = `<span class="lv-dim">${esc(L("opuszcza stronę", "leaves"))}</span>`;
+        else if (f.type === "login") what = `${esc(L("loguje się", "logs in"))} — ${esc(kindLabel(f.kind).toLowerCase())}`;
+        else if (f.type === "logout") what = `<span class="lv-dim">${esc(L("wylogowuje się", "logs out"))}</span>`;
+        else what = `→ ${actIcon(f.act)} ${esc(actLabel(f.act).toLowerCase())}${f.c ? caseChip(f.c) : ""}`;
+        return `<div class="lv-fi"><span class="lv-ft">${esc(hhmm(f.t))}</span><span><b>${esc(f.name)}</b> ${what}</span></div>`;
+    }).join("");
+}
+
+function renderLive() {
+    if (!liveActive()) return;
+    const list = sessions(), ppl = people(list);
+    const staff = ppl.filter(p => p.kind === "steward" || p.kind === "judge");
+    const drivers = ppl.filter(p => p.kind === "driver"), guests = ppl.filter(p => p.kind === "guest");
+    const typingN = ppl.filter(p => p.sessions.some(s => s.typing)).length;
+    const voiceN = ppl.filter(p => p.sessions.some(s => s.voice || s.call)).length;
+
+    $("lvTitle").textContent = L("🟢 Na żywo — kto co robi", "🟢 Live — who is doing what");
+    $("lvSubtitle").textContent = L("Aktualizuje się samo, w czasie rzeczywistym. Widać czynności (zakładka, sprawa, okno, „pisze…”) — nigdy treść wpisywana w pola.",
+                                    "Updates by itself, in real time. Shows activities (tab, case, window, “typing…”) — never what people type.");
+    const tile = (lbl, n, hot) => `<div class="stat-box${hot ? " hot" : ""}"><span>${esc(lbl)}</span><strong>${esc(n)}</strong></div>`;
+    $("lvTiles").innerHTML = tile(L("Online", "Online"), ppl.length) + tile(L("Stewardzi", "Stewards"), staff.length) + tile(L("Kierowcy", "Drivers"), drivers.length)
+        + tile(L("Goście", "Guests"), guests.length) + tile(L("Piszą teraz", "Typing now"), typingN, typingN > 0) + tile(L("Głos / rozmowy", "Voice / calls"), voiceN);
+
+    const tabLbl = { all: [L("Wszyscy", "Everyone"), ppl.length], staff: [L("Stewardzi", "Stewards"), staff.length], drivers: [L("Kierowcy", "Drivers"), drivers.length], guests: [L("Goście", "Guests"), guests.length] };
+    document.querySelectorAll("#lvTabs [data-lv-filter]").forEach(b => {
+        const f = b.dataset.lvFilter; b.textContent = tabLbl[f][0] + " (" + tabLbl[f][1] + ")"; b.classList.toggle("active", f === R.filter);
+    });
+
+    const sortP = arr => arr.slice().sort((a, b) => (a.self - b.self) || (KIND_ORDER[a.kind] - KIND_ORDER[b.kind]) || (STATE_ORDER[a.main.state] - STATE_ORDER[b.main.state]) || a.main.name.localeCompare(b.main.name, "pl"));
+    let html = "";
+    if (R.filter === "all") html = sortP(staff.concat(drivers)).map(personHtml).join("") + guestsHtml(guests);
+    else if (R.filter === "staff") html = sortP(staff).map(personHtml).join("");
+    else if (R.filter === "drivers") html = sortP(drivers).map(personHtml).join("");
+    else html = sortP(guests).map(p => personHtml(Object.assign({}, p, { main: Object.assign({}, p.main, { name: L("Gość", "Guest") + " · " + p.main.sid.slice(0, 4) }) }))).join("");
+    if (!html) html = `<div class="lv-empty">${esc(R.filter === "all" ? L("Nikogo poza Tobą nie ma teraz na stronie.", "Nobody but you is on the site right now.") : L("Brak osób w tej grupie.", "Nobody in this group."))}</div>`;
+    const loading = !(R.loaded[0] && R.loaded[1]);
+    if (loading && !ppl.length) html = `<div class="lv-empty">${esc(L("Łączenie…", "Connecting…"))}</div>`;
+    $("lvPeople").innerHTML = html;
+
+    $("lvCasesTitle").textContent = L("⚖️ Przy sprawach", "⚖️ Working on cases");
+    $("lvCases").innerHTML = casesHtml(list);
+    $("lvFeedTitle").textContent = L("🕒 Ostatnie zmiany", "🕒 Recent changes");
+    $("lvFeed").innerHTML = feedHtml();
+    renderConn();
+    renderDiag();
+}
+
+function renderConn() {
+    const el = $("lvConn");
+    if (!el) return;
+    const bad = W.mode === "denied" || (R.err[0] && R.err[1]);
+    if (bad) {
+        el.className = "lv-conn warn";
+        el.innerHTML = `⚠️ ${esc(L("problem z zapisem/odczytem — zobacz Diagnostykę", "write/read problem — see Diagnostics"))}`;
+    } else {
+        el.className = "lv-conn";
+        el.innerHTML = `<span class="lv-pulse"></span>${esc(L("na żywo", "live"))}${R.lastData ? " · " + esc(L("ostatnia zmiana", "last change")) + " " + esc(new Date(R.lastData).toLocaleTimeString("pl-PL")) : ""}`;
+    }
+}
+
+const RULES_SNIPPET = `"presence": {
+  ".read": "auth != null && (root.child('stewards').child(auth.uid).exists() || auth.token.owner === true)",
+  "$sesja": {
+    ".write": "auth != null && $sesja.matches(/^[a-z0-9]{8,24}$/)",
+    ".validate": "newData.hasChildren(['kind', 'name', 'act']) && newData.child('name').isString() && newData.child('name').val().length <= 60"
+  }
+},`;
+function renderDiag() {
+    const body = $("lvDiagBody"), sum = $("lvDiagSummary");
+    if (!body || !liveActive()) return;
+    sum.textContent = L("⚙️ Diagnostyka i reguły Firebase", "⚙️ Diagnostics and Firebase rules");
+    const wr = W.mode === "ok" ? `<span class="lv-ok">✅ presence</span>`
+        : W.mode === "fallback" ? `<span class="lv-mid">🟡 voiceMembers/_presence — ${esc(L("węzeł zapasowy (reguły nie pozwalają pisać w presence)", "fallback node (rules do not allow writing to presence)"))}</span>`
+        : W.mode === "denied" ? `<span class="lv-bad">❌ ${esc(L("zapis odrzucony w obu węzłach", "write rejected in both nodes"))}: ${esc(W.err)}</span>`
+        : `<span class="lv-dim">${esc(L("łączenie…", "connecting…"))}</span>`;
+    const rd = i => R.err[i] ? `<span class="lv-bad">❌ ${esc(R.err[i])}</span>` : R.loaded[i] ? `<span class="lv-ok">✅ ${Object.keys(R.data[i] || {}).length} ${esc(L("wpisów", "entries"))}</span>` : `<span class="lv-dim">…</span>`;
+    body.innerHTML = `
+      <div>${esc(L("Ta karta zapisuje obecność w", "This tab writes presence to"))}: ${wr}</div>
+      <div>${esc(L("Odczyt", "Read"))} presence: ${rd(0)} · ${esc(L("odczyt", "read"))} voiceMembers/_presence: ${rd(1)}</div>
+      <div class="lv-dim">${esc(L("ID tej karty", "This tab's ID"))}: ${esc(SID)}</div>
+      <p style="margin:10px 0 0;">${esc(L(
+        "Każda karta dodaje jeden mały wpis, który Firebase usuwa sam po jej zamknięciu. Docelowo wpisy powinny trafiać do węzła presence. Jeśli powyżej widać węzeł zapasowy albo błąd, dodaj w konsoli Firebase (Realtime Database → Reguły) poniższy fragment wewnątrz \"rules\": { … } — obok pozostałych węzłów — i kliknij Opublikuj. Odczyt mają tylko stewardzi i właściciele ligi, a zapisywać może tylko zalogowany.",
+        "Each tab adds one small entry that Firebase removes by itself when the tab closes. Entries should go to the presence node. If you see the fallback node or an error above, add the snippet below inside \"rules\": { … } in the Firebase console (Realtime Database → Rules), next to the other nodes, and click Publish. Only stewards and league owners can read it; only logged-in users can write."))}</p>
+      <pre id="lvRulesPre">${esc(RULES_SNIPPET)}</pre>
+      <button type="button" class="btn-secondary" style="padding:6px 14px; font-size:11px;" data-lv="copy-rules">📋 ${esc(L("Kopiuj fragment reguł", "Copy rules snippet"))}</button>`;
+}
+
+/* ---------- interakcje ---------- */
+document.addEventListener("click", e => {
+    const caseBtn = e.target.closest && e.target.closest("[data-lv-case]");
+    if (caseBtn) {
+        e.preventDefault();
+        const id = caseBtn.getAttribute("data-lv-case");
+        if (id && typeof openDescModal === "function" && canView()) openDescModal(id);
+        return;
+    }
+    const tab = e.target.closest && e.target.closest("#lvTabs [data-lv-filter]");
+    if (tab) { R.filter = tab.dataset.lvFilter; renderLive(); return; }
+    if (e.target.closest && e.target.closest("#lvConn.warn")) { const d = $("lvDiag"); if (d) { d.open = true; d.scrollIntoView({ behavior: "smooth", block: "start" }); } return; }
+    const copy = e.target.closest && e.target.closest("[data-lv='copy-rules']");
+    if (copy) {
+        const done = () => { copy.textContent = "✓ " + L("Skopiowano", "Copied"); setTimeout(renderDiag, 1600); };
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(RULES_SNIPPET).then(done, () => selectPre());
+        else selectPre();
+    }
+});
+function selectPre() { const pre = $("lvRulesPre"); if (!pre) return; const r = document.createRange(); r.selectNodeContents(pre); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); }
+
+/* ============================================================
+   5. KOORDYNACJA W PANELU (znaczniki w tabeli, panel werdyktu, okno sprawy)
+   ============================================================ */
+function othersOnCases() {
+    const mine = myKey(), map = new Map();
+    if (!R.on) return map;
+    sessions().forEach(s => {
+        if (!s.c || s.kind === "guest" || pkey(s) === mine) return;
+        const ci = caseInfo(s.c);
+        if (!map.has(ci.key)) map.set(ci.key, []);
+        map.get(ci.key).push(s);
+    });
+    map.forEach((arr, k) => { // jedna osoba = jeden wpis (najważniejsza karta)
+        const by = new Map(); arr.sort(rankSession).forEach(s => { if (!by.has(pkey(s))) by.set(pkey(s), s); });
+        map.set(k, [...by.values()]);
+    });
+    return map;
+}
+const whoLine = arr => arr.map(s => `<b>${esc(s.name)}</b> (${esc(actLabel(s.act).toLowerCase())}${s.since ? ", " + esc(ago(s.since)) : ""})`).join(", ");
+
+let rowSig = "";
+function decorateAdminRows(force) {
+    const body = $("adminTableBody");
+    if (!body) return;
+    const map = othersOnCases();
+    const sig = JSON.stringify([...map.entries()].map(([k, a]) => [k, a.map(s => s.sid + s.act)]));
+    if (!force && sig === rowSig) return;
+    rowSig = sig;
+    body.querySelectorAll(".lv-rowchips").forEach(el => el.remove());
+    if (!map.size) return;
+    body.querySelectorAll(".admin-row-cb").forEach(cb => {
+        const arr = map.get(cb.dataset.id), tr = cb.closest("tr");
+        if (!arr || !tr || !tr.children[1]) return;
+        const chips = arr.map(s => `<span class="case-chip lv-chip k-${esc(s.kind)}${WORK.has(s.act) ? " work" : ""}" title="${esc(s.name + " — " + actLabel(s.act) + (s.since ? " (" + ago(s.since) + ")" : ""))}">${s.kind === "driver" ? "🟢" : actIcon(s.act)} ${esc(firstName(s.name))}</span>`).join("");
+        tr.children[1].insertAdjacentHTML("beforeend", `<div class="lv-rowchips">${chips}</div>`);
+    });
+}
+
+function renderVerdictWarn() {
+    const box = $("lvVerdictWarn");
+    if (!box) return;
+    const v = canView() && shown("adminSection") ? verdictTarget() : null;
+    const ci = v ? caseInfo(v.c) : null;
+    const arr = ci ? (othersOnCases().get(ci.key) || []).filter(s => s.kind === "steward" || s.kind === "judge") : [];
+    if (!arr.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+    const work = arr.filter(s => WORK.has(s.act)), view = arr.filter(s => !WORK.has(s.act));
+    box.className = work.length ? "work" : "view";
+    box.innerHTML = work.length
+        ? `⚠️ ${esc(L("Uwaga — nad tą sprawą pracuje teraz także", "Heads-up — also working on this case right now"))}: ${whoLine(work)}. ${esc(L("Ustalcie, kto wydaje werdykt.", "Agree on who issues the verdict."))}${view.length ? `<br>👁 ${esc(L("Podgląd", "Viewing"))}: ${whoLine(view)}` : ""}`
+        : `👁 ${esc(L("Tę sprawę ma teraz otwartą", "Also has this case open"))}: ${whoLine(view)}`;
+    box.style.display = "block";
+}
+
+function renderDescViewers() {
+    const box = $("lvDescViewers");
+    if (!box) return;
+    const id = canView() && shown("descModal") ? g(() => currentlyEditedReportId) : null;
+    const arr = id ? (othersOnCases().get((caseInfo(id) || {}).key || id) || []) : [];
+    if (!arr.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+    box.className = arr.some(s => (s.kind === "steward" || s.kind === "judge") && WORK.has(s.act)) ? "work" : "";
+    box.innerHTML = `🟢 ${esc(L("Teraz przy tej sprawie", "Right now on this case"))}: ${whoLine(arr)}`;
+    box.style.display = "block";
+}
+
+function localViews() {
+    try { decorateAdminRows(false); renderVerdictWarn(); renderDescViewers(); updateMenu(); }
+    catch (e) { console.error("[128] widoki", e); }
+}
+
+/* --- podpięcie pod istniejące funkcje (natychmiastowa reakcja zamiast czekania na tick) --- */
+function after(name, fn) {
+    const orig = window[name];
+    if (typeof orig !== "function") return;
+    window[name] = function () {
+        const r = orig.apply(this, arguments);
+        try { fn.apply(this, arguments); } catch (e) { console.error("[128] " + name, e); }
+        return r;
+    };
+}
+after("showSection", id => { kick(); if (id === "liveSection") renderLive(); });
+after("renderAdmin", () => decorateAdminRows(true));
+["openDescModal", "closeDescModal", "toggleEditMode", "transferToVerdictPanel", "transferAppealToVerdict",
+ "openAppealEditModal", "closeAppealEditModal", "openAppealVerdictEditModal", "closeAppealVerdictEditModal",
+ "selectPlayerChatCase", "deselectPlayerChatCase", "handleStewardChatSelection", "openReportPreview", "closeReportPreview",
+ "adminLogout", "logoutDiscordDriver", "finalizeAutoLogin", "toggleLang"].forEach(n => after(n, () => { kick(); if (n === "toggleLang") renderLive(); }));
+document.addEventListener("focusin", e => { if (e.target && e.target.id === "modalNotesField") kick(); });
+document.addEventListener("focusout", e => { if (e.target && e.target.id === "modalNotesField") setTimeout(kick, 50); });
+
+// Start chwilę po wczytaniu strony — żeby zdążyło się odtworzyć logowanie kierowcy/stewarda
+// (inaczej każde odświeżenie wyglądałoby jak „gość → loguje się”).
+function start() {
+    if (started) return;
+    started = true;
+    tick();
+    setInterval(tick, 1000);
+    setInterval(() => { if (liveActive()) renderLive(); }, 5000);
+}
+if (document.readyState === "complete") setTimeout(start, 1500);
+else window.addEventListener("load", () => setTimeout(start, 1500));
+setTimeout(start, 8000); // gdyby zdarzenie load się opóźniało (np. wolne zasoby zewnętrzne)
+window.fiaLive = { sid: SID, state: () => ({ write: Object.assign({}, W), read: { on: R.on, err: R.err.slice(), loaded: R.loaded.slice() }, sessions: sessions() }) };
 })();
 </script>
 
